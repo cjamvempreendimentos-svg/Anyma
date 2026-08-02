@@ -107,7 +107,7 @@ function Dashboard({ products, sales, goTo }) {
   </>
 }
 
-function Metric({ label, value, note, positive, warning }) { return <article className="metric"><span>{label}</span><strong>{value}</strong><small className={positive ? 'positive' : warning ? 'warning' : ''}>{positive && '↗ '}{warning && '● '}{note}</small></article> }
+function Metric({ label, value, note, positive, warning }) { return <article className="metric"><span>{label}</span><strong>{value}</strong><small className={positive ? 'positive' : warning ? 'warning' : ''}>{positive && 'Alta · '}{warning && 'Atenção · '}{note}</small></article> }
 
 function POS({ products, cart, add, setQty, finish }) {
   const [query, setQuery] = useState('')
