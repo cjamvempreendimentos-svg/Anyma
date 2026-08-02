@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, money, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './lib/format'
 import { hasCapability, pageAllowed } from './lib/permissions'
+import { canGrantRole, roleLabel } from './lib/roles'
 import { supabase } from './lib/supabase'
 
 const nav = [
@@ -522,12 +523,13 @@ function Reports({ products, sales }) { const activeProducts=products.filter((pr
 function Team({ workspace, members, invitations, inviteMember, updateMember, cancelInvitation }) {
   const [open, setOpen] = useState(false)
   const [inviteLink, setInviteLink] = useState('')
-  const canGrantAdmin = workspace.role === 'owner' || workspace.role === 'superadmin'
+  const canGrantOwner = canGrantRole(workspace, 'owner')
+  const canGrantAdmin = canGrantRole(workspace, 'admin')
   const copyInvite = async (link) => {
     await navigator.clipboard.writeText(link)
   }
   return <>
-    {open && <TeamInviteForm canGrantAdmin={canGrantAdmin} onCancel={() => setOpen(false)} onSave={async (values) => {
+    {open && <TeamInviteForm canGrantOwner={canGrantOwner} canGrantAdmin={canGrantAdmin} onCancel={() => setOpen(false)} onSave={async (values) => {
       const result = await inviteMember(values)
       if (!result) return
       if (result.status === 'pending') setInviteLink(`${window.location.origin}?invite=${result.token}`)
@@ -542,14 +544,14 @@ function Team({ workspace, members, invitations, inviteMember, updateMember, can
       })}</div>
     </section>
     <section className="panel"><div className="panel-head"><div><span className="section-label">AGUARDANDO ACESSO</span><h3>Convites pendentes</h3></div><span className="pill">{invitations.length}</span></div>{!invitations.length ? <EmptyState title="Nenhum convite pendente" text="Os próximos convites aparecerão aqui até serem aceitos ou cancelados." /> : <div className="invitation-list">{invitations.map((invitation) => <article key={invitation.id}><div><strong>{invitation.email}</strong><span>{roleLabel(invitation.role)} · vence {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</span></div><button className="secondary" onClick={() => cancelInvitation(invitation.id)}>Cancelar</button></article>)}</div>}</section>
-    <div className="security-note safe"><CheckCircle2 size={19}/><p>Proprietário e Administrador gerenciam a equipe. Gerente cuida da operação. Vendedor/Caixa vende e confere apenas seu próprio turno. Consulta não altera dados.</p></div>
+    <div className="security-note safe"><CheckCircle2 size={19}/><p>Proprietária tem acesso total e seu vínculo é protegido. Administrador gerencia a equipe e a operação. Gerente cuida da rotina. Vendedor/Caixa vende e confere apenas seu próprio turno. Consulta não altera dados.</p></div>
   </>
 }
 
-function TeamInviteForm({ canGrantAdmin, onCancel, onSave }) {
+function TeamInviteForm({ canGrantOwner, canGrantAdmin, onCancel, onSave }) {
   const [values, setValues] = useState({ email: '', role: 'operator' })
   const [saving, setSaving] = useState(false)
-  return <div className="modal-backdrop"><form className="modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave(values); setSaving(false) }}><div className="panel-head"><div><span className="section-label">NOVO ACESSO</span><h3>Convidar para a equipe</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label className="wide-field">E-mail da pessoa<input required type="email" maxLength="254" value={values.email} onChange={(event) => setValues((current) => ({ ...current, email: event.target.value }))} /></label><label className="wide-field">Função<select value={values.role} onChange={(event) => setValues((current) => ({ ...current, role: event.target.value }))}>{canGrantAdmin && <option value="admin">Administrador</option>}<option value="manager">Gerente</option><option value="operator">Vendedor / Caixa</option><option value="viewer">Somente consulta</option></select></label></div><div className="role-guide"><div><strong>Administrador</strong><span>Equipe, cadastros, caixa e financeiro.</span></div><div><strong>Gerente</strong><span>Operação, estoque, compras e financeiro.</span></div><div><strong>Vendedor / Caixa</strong><span>PDV, clientes e o próprio turno.</span></div><div><strong>Consulta</strong><span>Painel, produtos, estoque e relatórios, sem alterações.</span></div></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Criando...' : 'Criar convite'}</button></div></form></div>
+  return <div className="modal-backdrop"><form className="modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave(values); setSaving(false) }}><div className="panel-head"><div><span className="section-label">NOVO ACESSO</span><h3>Convidar para a equipe</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label className="wide-field">E-mail da pessoa<input required type="email" maxLength="254" value={values.email} onChange={(event) => setValues((current) => ({ ...current, email: event.target.value }))} /></label><label className="wide-field">Função<select value={values.role} onChange={(event) => setValues((current) => ({ ...current, role: event.target.value }))}>{canGrantOwner && <option value="owner">Proprietária</option>}{canGrantAdmin && <option value="admin">Administrador</option>}<option value="manager">Gerente</option><option value="operator">Vendedor / Caixa</option><option value="viewer">Somente consulta</option></select></label></div><div className="role-guide">{canGrantOwner && <div><strong>Proprietária</strong><span>Dona da loja, com acesso total e vínculo protegido.</span></div>}<div><strong>Administrador</strong><span>Equipe, cadastros, caixa e financeiro.</span></div><div><strong>Gerente</strong><span>Operação, estoque, compras e financeiro.</span></div><div><strong>Vendedor / Caixa</strong><span>PDV, clientes e o próprio turno.</span></div><div><strong>Consulta</strong><span>Painel, produtos, estoque e relatórios, sem alterações.</span></div></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Criando...' : 'Criar convite'}</button></div></form></div>
 }
 
 function Placeholder({ icon:Icon, title, text, action }) { return <section className="panel placeholder"><span><Icon/></span><h2>{title}</h2><p>{text}</p><button className="primary">{action}</button></section> }
@@ -621,6 +623,5 @@ function lastSevenDays(sales) {
 }
 
 function initials(name = '') { return name.split(' ').filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'U' }
-function roleLabel(role) { return ({ superadmin: 'Superadministrador', owner: 'Proprietário', admin: 'Administrador', manager: 'Gerente', operator: 'Operador', viewer: 'Consulta' })[role] || 'Usuário' }
 
 export default App
