@@ -7,7 +7,7 @@ describe('regras comerciais', () => {
   })
 
   it('identifica itens abaixo do estoque mínimo', () => {
-    expect(lowStock([{ stock: 2, min: 3 }, { stock: 8, min: 4 }])).toHaveLength(1)
+    expect(lowStock([{ stock: 2, min: 3, active: true }, { stock: 0, min: 4, active: false }, { stock: 8, min: 4, active: true }])).toHaveLength(1)
   })
 
   it('calcula o total de uma compra recebida', () => {
