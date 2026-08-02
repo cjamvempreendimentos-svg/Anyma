@@ -5,8 +5,10 @@ import {
   ShoppingBag, ShoppingCart, Store, Users, WalletCards, X, Minus, Plus, CheckCircle2,
   AlertTriangle, ArrowUpRight, ShieldCheck, Building2, Truck, Phone, Mail, LockKeyhole,
   Banknote, ArrowDownToLine, ArrowUpFromLine, CalendarClock,
+  Clipboard, UserPlus,
 } from 'lucide-react'
 import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, money, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './lib/format'
+import { hasCapability, pageAllowed } from './lib/permissions'
 import { supabase } from './lib/supabase'
 
 const nav = [
@@ -28,24 +30,31 @@ function App({ workspace }) {
   const [cashMovements, setCashMovements] = useState([])
   const [cashReconciliations, setCashReconciliations] = useState([])
   const [financialEntries, setFinancialEntries] = useState([])
+  const [teamMembers, setTeamMembers] = useState([])
+  const [teamInvitations, setTeamInvitations] = useState([])
   const [toast, setToast] = useState('')
   const [dataLoading, setDataLoading] = useState(true)
 
   const loadData = async () => {
     setDataLoading(true)
-    const [productsResult, salesResult, salePaymentsResult, customersResult, suppliersResult, purchasesResult, sessionsResult, movementsResult, reconciliationsResult, financeResult] = await Promise.all([
-      supabase.from('products').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
+    const canManage = hasCapability(workspace.role, 'management')
+    const canManageTeam = hasCapability(workspace.role, 'team')
+    const skipped = Promise.resolve({ data: [], error: null })
+    const [productsResult, salesResult, salePaymentsResult, customersResult, suppliersResult, purchasesResult, sessionsResult, movementsResult, reconciliationsResult, financeResult, teamResult, invitationsResult] = await Promise.all([
+      supabase.rpc('list_store_products', { p_store_id: workspace.store.id }),
       supabase.from('sales').select('*').eq('store_id', workspace.store.id).order('sold_at', { ascending: false }).limit(50),
       supabase.from('sale_payments').select('*').eq('store_id', workspace.store.id).order('created_at', { ascending: false }).limit(200),
       supabase.from('customers').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
-      supabase.from('suppliers').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
-      supabase.from('purchases').select('*').eq('store_id', workspace.store.id).order('received_at', { ascending: false }).limit(50),
+      canManage ? supabase.from('suppliers').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name') : skipped,
+      canManage ? supabase.from('purchases').select('*').eq('store_id', workspace.store.id).order('received_at', { ascending: false }).limit(50) : skipped,
       supabase.from('cash_sessions').select('*').eq('store_id', workspace.store.id).order('opened_at', { ascending: false }).limit(30),
       supabase.from('cash_movements').select('*').eq('store_id', workspace.store.id).order('created_at', { ascending: false }).limit(100),
       supabase.from('cash_reconciliations').select('*').eq('store_id', workspace.store.id).order('reconciled_at', { ascending: false }).limit(30),
-      supabase.from('financial_entries').select('*').eq('store_id', workspace.store.id).order('due_date', { ascending: true }).limit(100),
+      canManage ? supabase.from('financial_entries').select('*').eq('store_id', workspace.store.id).order('due_date', { ascending: true }).limit(100) : skipped,
+      canManageTeam ? supabase.rpc('list_store_team', { p_store_id: workspace.store.id }) : skipped,
+      canManageTeam ? supabase.from('store_invitations').select('id,email,role,status,expires_at,created_at').eq('store_id', workspace.store.id).eq('status', 'pending').order('created_at', { ascending: false }) : skipped,
     ])
-    if ([productsResult, salesResult, salePaymentsResult, customersResult, suppliersResult, purchasesResult, sessionsResult, movementsResult, reconciliationsResult, financeResult].some((result) => result.error)) notify('Não foi possível atualizar todos os dados da loja.')
+    if ([productsResult, salesResult, salePaymentsResult, customersResult, suppliersResult, purchasesResult, sessionsResult, movementsResult, reconciliationsResult, financeResult, teamResult, invitationsResult].some((result) => result.error)) notify('Não foi possível atualizar todos os dados permitidos para seu acesso.')
     const paymentsBySale = (salePaymentsResult.data || []).reduce((grouped, payment) => ({ ...grouped, [payment.sale_id]: [...(grouped[payment.sale_id] || []), payment] }), {})
     setProducts((productsResult.data || []).map(mapProduct))
     setSales((salesResult.data || []).map((row) => mapSale(row, paymentsBySale[row.id] || [])))
@@ -56,6 +65,8 @@ function App({ workspace }) {
     setCashMovements((movementsResult.data || []).map(mapCashMovement))
     setCashReconciliations((reconciliationsResult.data || []).map(mapCashReconciliation))
     setFinancialEntries((financeResult.data || []).map((row) => mapFinancialEntry(row, paymentsBySale[row.sale_id] || [])))
+    setTeamMembers(teamResult.data || [])
+    setTeamInvitations(invitationsResult.data || [])
     setDataLoading(false)
   }
 
@@ -209,7 +220,38 @@ function App({ workspace }) {
     await loadData(); notify('Pagamento/recebimento confirmado.'); return true
   }
 
-  const navigation = workspace.isPlatformAdmin ? [['Central Anyma', ShieldCheck], ...nav] : nav
+  const inviteTeamMember = async (values) => {
+    const { data, error } = await supabase.rpc('create_team_invitation', {
+      p_store_id: workspace.store.id,
+      p_email: values.email,
+      p_role: values.role,
+    })
+    if (error) { notify(error.message || 'Não foi possível criar o convite.'); return null }
+    await loadData()
+    notify(data.status === 'added' ? 'Usuário existente adicionado à equipe.' : 'Convite criado por 7 dias.')
+    return data
+  }
+
+  const updateTeamMember = async (userId, role, active) => {
+    const { error } = await supabase.rpc('update_team_member', {
+      p_store_id: workspace.store.id, p_user_id: userId, p_role: role, p_active: active,
+    })
+    if (error) { notify(error.message || 'Não foi possível alterar este acesso.'); return false }
+    await loadData(); notify(active ? 'Acesso atualizado.' : 'Acesso suspenso.'); return true
+  }
+
+  const cancelTeamInvitation = async (invitationId) => {
+    const { error } = await supabase.rpc('cancel_team_invitation', { p_invitation_id: invitationId })
+    if (error) { notify('Não foi possível cancelar este convite.'); return false }
+    await loadData(); notify('Convite cancelado.'); return true
+  }
+
+  const allowedPages = nav.filter(([label]) => pageAllowed(workspace.role, label))
+  const navigation = workspace.isPlatformAdmin ? [['Central Anyma', ShieldCheck], ...allowedPages] : allowedPages
+
+  useEffect(() => {
+    if (page !== 'Central Anyma' && !pageAllowed(workspace.role, page)) setPage('Visão geral')
+  }, [page, workspace.role])
 
   return (
     <div className="app-shell">
@@ -234,14 +276,14 @@ function App({ workspace }) {
           {page === 'Central Anyma' && <PlatformCentral workspace={workspace} />}
           {page === 'Visão geral' && <Dashboard products={products} sales={sales} activeCash={activeCash} goTo={changePage} />}
           {page === 'PDV' && <POS products={products} customers={customers} activeCash={activeCash} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
-          {page === 'Produtos' && <Products products={products} add={addToCart} goTo={changePage} createProduct={createProduct} />}
-          {page === 'Estoque' && <Inventory products={products} adjustStock={adjustStock} />}
+          {page === 'Produtos' && <Products products={products} add={addToCart} goTo={changePage} createProduct={createProduct} canManage={hasCapability(workspace.role, 'management')} />}
+          {page === 'Estoque' && <Inventory products={products} adjustStock={adjustStock} canManage={hasCapability(workspace.role, 'management')} />}
           {page === 'Clientes' && <Customers customers={customers} createCustomer={createCustomer} />}
           {page === 'Caixa' && <Cashier workspace={workspace} activeCash={activeCash} sessions={cashSessions} movements={cashMovements} reconciliations={cashReconciliations} openCash={openCash} moveCash={moveCash} closeCash={closeCash} reconcileCash={reconcileCash} />}
           {page === 'Financeiro' && <Finance entries={financialEntries} createEntry={createFinancialEntry} settleEntry={settleFinancialEntry} />}
           {page === 'Relatórios' && <Reports products={products} sales={sales} />}
           {page === 'Compras' && <Purchases products={products} suppliers={suppliers} purchases={purchases} createSupplier={createSupplier} receivePurchase={receivePurchase} />}
-          {page === 'Equipe e acessos' && <Team workspace={workspace} />}
+          {page === 'Equipe e acessos' && <Team workspace={workspace} members={teamMembers} invitations={teamInvitations} inviteMember={inviteTeamMember} updateMember={updateTeamMember} cancelInvitation={cancelTeamInvitation} />}
         </div>
       </main>
       {toast && <div className="toast"><CheckCircle2 size={19}/>{toast}</div>}
@@ -296,12 +338,12 @@ function POS({ products, customers, activeCash, cart, add, setQty, finish }) {
   return <>{!activeCash && <div className="security-note"><LockKeyhole size={19}/><p>Seu turno está fechado. Abra o caixa antes de concluir uma venda.</p></div>}<div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><label className="cart-select">Cliente<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Consumidor final</option>{customers.map((customer) => <option value={customer.id} key={customer.id}>{customer.name}</option>)}</select></label><div className="split-payment"><div className="split-payment-head"><span>Pagamentos</span><button type="button" className="text-btn" disabled={payments.length === 4} onClick={() => { const nextMethod = ['Pix','Crédito','Débito','Dinheiro'].find((method) => !payments.some((payment) => payment.method === method)); setPayments((current) => [...current, { method: nextMethod, amount: '' }]) }}><Plus size={14}/>Dividir pagamento</button></div>{payments.map((payment, index) => <div className="payment-row" key={`${payment.method}-${index}`}><select value={payment.method} onChange={(event) => updatePayment(index, 'method', event.target.value)}>{availableMethods(index).map((method) => <option key={method}>{method}</option>)}</select><label>R$<input required min="0.01" step="0.01" type="number" value={payment.amount} onChange={(event) => updatePayment(index, 'amount', event.target.value)} /></label>{payments.length > 1 && <button type="button" className="icon-btn" title="Remover pagamento" onClick={() => setPayments((current) => current.filter((_, paymentIndex) => paymentIndex !== index))}><X/></button>}</div>)}<div className={paymentValid ? 'payment-balance matched' : 'payment-balance'}><span>Informado {money(paid)}</span><b>{paymentValid ? 'Total conferido' : `Falta ${money(total - paid)}`}</b></div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" disabled={!activeCash || !paymentValid} onClick={async () => { if (await finish(payments, customerId)) { setCustomerId(''); setPayments([{ method: 'Pix', amount: '' }]) } }}><CheckCircle2/>Finalizar venda</button></>}</aside></div></>
 }
 
-function Products({ products, add, goTo, createProduct }) {
+function Products({ products, add, goTo, createProduct, canManage }) {
   const [open, setOpen] = useState(false)
   return <>
-    {open && <ProductForm onCancel={() => setOpen(false)} onSave={async (values) => { if (await createProduct(values)) setOpen(false) }} />}
-    <section className="panel"><div className="panel-head"><div><span className="section-label">CATÁLOGO REAL</span><h3>{products.length} produtos ativos</h3></div><div className="panel-actions"><button className="secondary" onClick={() => setOpen(true)}><PackagePlus size={17}/>Novo produto</button><button className="primary" onClick={() => goTo('PDV')}><ShoppingCart size={18}/>Abrir PDV</button></div></div>
-      {!products.length ? <EmptyState title="Seu catálogo está vazio" text="Cadastre o primeiro produto para liberar vendas e controle de estoque." action="Cadastrar produto" onAction={() => setOpen(true)} /> : <div className="catalog">{products.map(product => <div className="catalog-row" key={product.id}><span className="product-swatch big" style={{background:product.color}}/><div><strong>{product.name}</strong><span>{product.sku} · {product.category}</span></div><span>{money(product.cost)} custo</span><b>{money(product.price)}</b><span className={product.stock <= product.min ? 'stock low' : 'stock'}>{product.stock} un.</span><button className="icon-btn" onClick={() => add(product)} title="Adicionar ao carrinho"><Plus/></button></div>)}</div>}
+    {open && canManage && <ProductForm onCancel={() => setOpen(false)} onSave={async (values) => { if (await createProduct(values)) setOpen(false) }} />}
+    <section className="panel"><div className="panel-head"><div><span className="section-label">CATÁLOGO REAL</span><h3>{products.length} produtos ativos</h3></div><div className="panel-actions">{canManage && <button className="secondary" onClick={() => setOpen(true)}><PackagePlus size={17}/>Novo produto</button>}<button className="primary" onClick={() => goTo('PDV')}><ShoppingCart size={18}/>Abrir PDV</button></div></div>
+      {!products.length ? <EmptyState title="Seu catálogo está vazio" text={canManage ? 'Cadastre o primeiro produto para liberar vendas e controle de estoque.' : 'Ainda não há produtos disponíveis para venda.'} action={canManage ? 'Cadastrar produto' : undefined} onAction={() => setOpen(true)} /> : <div className="catalog">{products.map(product => <div className="catalog-row" key={product.id}><span className="product-swatch big" style={{background:product.color}}/><div><strong>{product.name}</strong><span>{product.sku} · {product.category}</span></div><span>{canManage ? `${money(product.cost)} custo` : 'Custo protegido'}</span><b>{money(product.price)}</b><span className={product.stock <= product.min ? 'stock low' : 'stock'}>{product.stock} un.</span><button className="icon-btn" onClick={() => add(product)} title="Adicionar ao carrinho"><Plus/></button></div>)}</div>}
     </section>
   </>
 }
@@ -317,10 +359,10 @@ function ProductForm({ onCancel, onSave }) {
   </form></div>
 }
 
-function Inventory({ products, adjustStock }) {
+function Inventory({ products, adjustStock, canManage }) {
   const [editing, setEditing] = useState(null)
   return <><div className="page-intro"><div><span className="section-label">CONTROLE DE ESTOQUE</span><h2>Reposição sem surpresa</h2><p>Cada entrada ou correção gera uma movimentação auditável.</p></div></div>
-    {!products.length ? <EmptyState title="Nenhum produto em estoque" text="Cadastre um produto para começar." /> : <section className="inventory-grid">{products.map(p => { const percent = Math.min(100, p.stock / (Math.max(1,p.min)*3) * 100); const low = p.stock <= p.min; return <article className="inventory-card" key={p.id}><div><span className="product-swatch big" style={{background:p.color}}/><span className={low?'status danger':'status'}>{low?'Repor':'Saudável'}</span></div><strong>{p.name}</strong><small>{p.sku} · mínimo {p.min}</small><div className="stock-number"><b>{p.stock}</b><span>unidades</span></div><div className="progress"><i className={low?'low':''} style={{width:`${percent}%`}}/></div><button className="secondary stock-action" onClick={() => setEditing(editing === p.id ? null : p.id)}>Registrar movimentação</button>{editing === p.id && <StockForm onSave={async (delta, reason) => { if (await adjustStock(p.id, delta, reason)) setEditing(null) }} />}</article> })}</section>}
+    {!products.length ? <EmptyState title="Nenhum produto em estoque" text="Cadastre um produto para começar." /> : <section className="inventory-grid">{products.map(p => { const percent = Math.min(100, p.stock / (Math.max(1,p.min)*3) * 100); const low = p.stock <= p.min; return <article className="inventory-card" key={p.id}><div><span className="product-swatch big" style={{background:p.color}}/><span className={low?'status danger':'status'}>{low?'Repor':'Saudável'}</span></div><strong>{p.name}</strong><small>{p.sku} · mínimo {p.min}</small><div className="stock-number"><b>{p.stock}</b><span>unidades</span></div><div className="progress"><i className={low?'low':''} style={{width:`${percent}%`}}/></div>{canManage && <><button className="secondary stock-action" onClick={() => setEditing(editing === p.id ? null : p.id)}>Registrar movimentação</button>{editing === p.id && <StockForm onSave={async (delta, reason) => { if (await adjustStock(p.id, delta, reason)) setEditing(null) }} />}</>}</article> })}</section>}
   </>
 }
 
@@ -428,7 +470,38 @@ function FinancialEntryForm({ onCancel,onSave }) { const [values,setValues]=useS
 
 function Reports({ products, sales }) { const top=[...products].sort((a,b)=>b.price*b.stock-a.price*a.stock).slice(0,4); return <div className="report-grid"><section className="panel"><div className="panel-head"><div><span className="section-label">RESULTADOS</span><h3>Resumo comercial</h3></div><button className="secondary" disabled><ReceiptText size={17}/>Exportar no próximo bloco</button></div><div className="report-summary"><div><span>Faturamento</span><strong>{money(sales.reduce((s,v)=>s+v.total,0))}</strong></div><div><span>Vendas concluídas</span><strong>{sales.length}</strong></div><div><span>Estoque a preço de venda</span><strong>{money(products.reduce((s,p)=>s+p.price*p.stock,0))}</strong></div></div></section><section className="panel"><span className="section-label">MAIOR POTENCIAL</span><h3>Produtos em destaque</h3>{top.map((p,i)=><div className="rank" key={p.id}><b>0{i+1}</b><span className="product-swatch" style={{background:p.color}}/><div><strong>{p.name}</strong><span>{p.stock} unidades disponíveis</span></div><em>{money(p.price*p.stock)}</em></div>)}</section></div> }
 
-function Team({ workspace }) { return <section className="panel"><div className="panel-head"><div><span className="section-label">SEGURANÇA E OPERAÇÃO</span><h3>Equipe e níveis de acesso</h3></div><button className="secondary" disabled><Users size={18}/>Convites no próximo bloco</button></div><div className="team-list"><div><span>{initials(workspace.profile?.full_name)}</span><div><strong>{workspace.profile?.full_name}</strong><small>Acesso protegido por autenticação</small></div><b>{roleLabel(workspace.role)}</b><em>Ativo</em></div></div><div className="security-note safe"><CheckCircle2 size={19}/><p>Autenticação e isolamento entre lojas estão ativos no banco. Convites e gestão de outros usuários ainda não foram liberados.</p></div></section> }
+function Team({ workspace, members, invitations, inviteMember, updateMember, cancelInvitation }) {
+  const [open, setOpen] = useState(false)
+  const [inviteLink, setInviteLink] = useState('')
+  const canGrantAdmin = workspace.role === 'owner' || workspace.role === 'superadmin'
+  const copyInvite = async (link) => {
+    await navigator.clipboard.writeText(link)
+  }
+  return <>
+    {open && <TeamInviteForm canGrantAdmin={canGrantAdmin} onCancel={() => setOpen(false)} onSave={async (values) => {
+      const result = await inviteMember(values)
+      if (!result) return
+      if (result.status === 'pending') setInviteLink(`${window.location.origin}?invite=${result.token}`)
+      else setOpen(false)
+    }} />}
+    <div className="page-intro"><div><span className="section-label">SEGURANÇA E OPERAÇÃO</span><h2>Equipe e níveis de acesso</h2><p>Cada pessoa entra com sua própria conta e enxerga somente o necessário para sua função.</p></div><button className="primary" onClick={() => { setInviteLink(''); setOpen(true) }}><UserPlus size={18}/>Convidar pessoa</button></div>
+    {inviteLink && <section className="invite-result"><div><strong>Convite criado</strong><span>Copie este link e envie somente para o e-mail informado. Ele vence em 7 dias e funciona uma vez.</span></div><code>{inviteLink}</code><div className="panel-actions"><button className="secondary" onClick={() => copyInvite(inviteLink)}><Clipboard size={17}/>Copiar link</button><button className="text-btn" onClick={() => { setInviteLink(''); setOpen(false) }}>Fechar</button></div></section>}
+    <section className="panel"><div className="panel-head"><div><span className="section-label">PESSOAS ATIVAS</span><h3>{members.length} integrantes</h3></div></div>
+      <div className="team-list">{members.map((member) => {
+        const protectedMember = member.role === 'owner' || member.user_id === workspace.userId || (workspace.role === 'admin' && member.role === 'admin')
+        return <div key={member.user_id}><span>{initials(member.full_name)}</span><div><strong>{member.full_name}</strong><small>{member.email}</small></div><select aria-label={`Função de ${member.full_name}`} value={member.role} disabled={protectedMember} onChange={(event) => updateMember(member.user_id, event.target.value, member.active)}>{member.role === 'owner' && <option value="owner">Proprietário</option>}{canGrantAdmin && <option value="admin">Administrador</option>}<option value="manager">Gerente</option><option value="operator">Vendedor / Caixa</option><option value="viewer">Consulta</option></select><button className={member.active ? 'status-button active' : 'status-button'} disabled={protectedMember} onClick={() => updateMember(member.user_id, member.role, !member.active)}>{member.active ? 'Ativo' : 'Suspenso'}</button></div>
+      })}</div>
+    </section>
+    <section className="panel"><div className="panel-head"><div><span className="section-label">AGUARDANDO ACESSO</span><h3>Convites pendentes</h3></div><span className="pill">{invitations.length}</span></div>{!invitations.length ? <EmptyState title="Nenhum convite pendente" text="Os próximos convites aparecerão aqui até serem aceitos ou cancelados." /> : <div className="invitation-list">{invitations.map((invitation) => <article key={invitation.id}><div><strong>{invitation.email}</strong><span>{roleLabel(invitation.role)} · vence {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</span></div><button className="secondary" onClick={() => cancelInvitation(invitation.id)}>Cancelar</button></article>)}</div>}</section>
+    <div className="security-note safe"><CheckCircle2 size={19}/><p>Proprietário e Administrador gerenciam a equipe. Gerente cuida da operação. Vendedor/Caixa vende e confere apenas seu próprio turno. Consulta não altera dados.</p></div>
+  </>
+}
+
+function TeamInviteForm({ canGrantAdmin, onCancel, onSave }) {
+  const [values, setValues] = useState({ email: '', role: 'operator' })
+  const [saving, setSaving] = useState(false)
+  return <div className="modal-backdrop"><form className="modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave(values); setSaving(false) }}><div className="panel-head"><div><span className="section-label">NOVO ACESSO</span><h3>Convidar para a equipe</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label className="wide-field">E-mail da pessoa<input required type="email" maxLength="254" value={values.email} onChange={(event) => setValues((current) => ({ ...current, email: event.target.value }))} /></label><label className="wide-field">Função<select value={values.role} onChange={(event) => setValues((current) => ({ ...current, role: event.target.value }))}>{canGrantAdmin && <option value="admin">Administrador</option>}<option value="manager">Gerente</option><option value="operator">Vendedor / Caixa</option><option value="viewer">Somente consulta</option></select></label></div><div className="role-guide"><div><strong>Administrador</strong><span>Equipe, cadastros, caixa e financeiro.</span></div><div><strong>Gerente</strong><span>Operação, estoque, compras e financeiro.</span></div><div><strong>Vendedor / Caixa</strong><span>PDV, clientes e o próprio turno.</span></div><div><strong>Consulta</strong><span>Painel, produtos, estoque e relatórios, sem alterações.</span></div></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Criando...' : 'Criar convite'}</button></div></form></div>
+}
 
 function Placeholder({ icon:Icon, title, text, action }) { return <section className="panel placeholder"><span><Icon/></span><h2>{title}</h2><p>{text}</p><button className="primary">{action}</button></section> }
 
@@ -437,7 +510,7 @@ function SalesTable({ sales }) { return <div className="table"><div className="t
 function EmptyState({ title, text, action, onAction }) { return <div className="empty-state"><ShoppingBag/><strong>{title}</strong><p>{text}</p>{action && <button className="primary" onClick={onAction}>{action}</button>}</div> }
 
 function mapProduct(row) {
-  return { id: row.id, sku: row.sku, name: row.name, category: row.category, cost: row.cost_cents / 100, price: row.price_cents / 100, stock: row.stock_quantity, min: row.min_stock, color: row.color }
+  return { id: row.id, sku: row.sku, name: row.name, category: row.category, cost: row.cost_cents == null ? null : row.cost_cents / 100, price: row.price_cents / 100, stock: row.stock_quantity, min: row.min_stock, color: row.color }
 }
 
 function mapSale(row, payments = []) {
