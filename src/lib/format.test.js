@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lowStock, saleTotal } from './format'
+import { lowStock, purchaseTotal, saleTotal } from './format'
 
 describe('regras comerciais', () => {
   it('calcula o total do carrinho', () => {
@@ -8,5 +8,9 @@ describe('regras comerciais', () => {
 
   it('identifica itens abaixo do estoque mínimo', () => {
     expect(lowStock([{ stock: 2, min: 3 }, { stock: 8, min: 4 }])).toHaveLength(1)
+  })
+
+  it('calcula o total de uma compra recebida', () => {
+    expect(purchaseTotal([{ cost: '12.50', quantity: '3' }, { cost: '8', quantity: '2' }])).toBe(53.5)
   })
 })

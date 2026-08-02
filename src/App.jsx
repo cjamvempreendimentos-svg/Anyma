@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  BadgeDollarSign, BarChart3, Boxes, ChevronDown, CircleUserRound, ClipboardList,
+  BadgeDollarSign, BarChart3, Boxes, ChevronDown, CircleUserRound,
   CreditCard, LayoutDashboard, Menu, PackagePlus, ReceiptText, Search, Settings,
   ShoppingBag, ShoppingCart, Store, Users, WalletCards, X, Minus, Plus, CheckCircle2,
-  AlertTriangle, ArrowUpRight, Sparkles, ShieldCheck, Building2,
+  AlertTriangle, ArrowUpRight, Sparkles, ShieldCheck, Building2, Truck, Phone, Mail,
 } from 'lucide-react'
-import { lowStock, money, saleTotal } from './lib/format'
+import { lowStock, money, purchaseTotal, saleTotal } from './lib/format'
 import { supabase } from './lib/supabase'
 
 const nav = [
@@ -20,18 +20,27 @@ function App({ workspace }) {
   const [products, setProducts] = useState([])
   const [cart, setCart] = useState([])
   const [sales, setSales] = useState([])
+  const [customers, setCustomers] = useState([])
+  const [suppliers, setSuppliers] = useState([])
+  const [purchases, setPurchases] = useState([])
   const [toast, setToast] = useState('')
   const [dataLoading, setDataLoading] = useState(true)
 
   const loadData = async () => {
     setDataLoading(true)
-    const [{ data: productRows, error: productsError }, { data: saleRows, error: salesError }] = await Promise.all([
+    const [productsResult, salesResult, customersResult, suppliersResult, purchasesResult] = await Promise.all([
       supabase.from('products').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
       supabase.from('sales').select('*').eq('store_id', workspace.store.id).order('sold_at', { ascending: false }).limit(50),
+      supabase.from('customers').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
+      supabase.from('suppliers').select('*').eq('store_id', workspace.store.id).eq('active', true).order('name'),
+      supabase.from('purchases').select('*').eq('store_id', workspace.store.id).order('received_at', { ascending: false }).limit(50),
     ])
-    if (productsError || salesError) notify('Não foi possível atualizar todos os dados da loja.')
-    setProducts((productRows || []).map(mapProduct))
-    setSales((saleRows || []).map(mapSale))
+    if ([productsResult, salesResult, customersResult, suppliersResult, purchasesResult].some((result) => result.error)) notify('Não foi possível atualizar todos os dados da loja.')
+    setProducts((productsResult.data || []).map(mapProduct))
+    setSales((salesResult.data || []).map(mapSale))
+    setCustomers(customersResult.data || [])
+    setSuppliers(suppliersResult.data || [])
+    setPurchases((purchasesResult.data || []).map(mapPurchase))
     setDataLoading(false)
   }
 
@@ -55,12 +64,13 @@ function App({ workspace }) {
     .map((item) => item.id === id ? { ...item, qty: Math.min(item.stock, item.qty + delta) } : item)
     .filter((item) => item.qty > 0))
 
-  const finishSale = async (payment) => {
+  const finishSale = async (payment, customerId) => {
     if (!cart.length) return
     const total = saleTotal(cart)
-    const { error } = await supabase.rpc('complete_sale', {
+    const { error } = await supabase.rpc('complete_sale_v2', {
       p_store_id: workspace.store.id,
       p_payment_method: payment,
+      p_customer_id: customerId || null,
       p_items: cart.map((item) => ({ product_id: item.id, quantity: item.qty })),
     })
     if (error) return notify(error.message.includes('Estoque insuficiente') ? error.message : 'Não foi possível concluir a venda.')
@@ -98,6 +108,36 @@ function App({ workspace }) {
     await loadData(); notify('Movimentação de estoque registrada.'); return true
   }
 
+  const createCustomer = async (values) => {
+    const { data: userData } = await supabase.auth.getUser()
+    const { error } = await supabase.from('customers').insert({
+      store_id: workspace.store.id, name: values.name.trim(), phone: values.phone.trim(),
+      email: values.email.trim(), notes: values.notes.trim(), created_by: userData.user?.id,
+    })
+    if (error) { notify('Não foi possível cadastrar o cliente.'); return false }
+    await loadData(); notify('Cliente cadastrado.'); return true
+  }
+
+  const createSupplier = async (values) => {
+    const { data: userData } = await supabase.auth.getUser()
+    const { data, error } = await supabase.from('suppliers').insert({
+      store_id: workspace.store.id, name: values.name.trim(), contact_name: values.contact.trim(),
+      phone: values.phone.trim(), email: values.email.trim(), created_by: userData.user?.id,
+    }).select().single()
+    if (error) { notify('Não foi possível cadastrar o fornecedor.'); return null }
+    await loadData(); notify('Fornecedor cadastrado.'); return data
+  }
+
+  const receivePurchase = async (values) => {
+    const { error } = await supabase.rpc('receive_purchase', {
+      p_store_id: workspace.store.id, p_supplier_id: values.supplierId,
+      p_document_number: values.document, p_notes: values.notes,
+      p_items: values.items.map((item) => ({ product_id: item.productId, quantity: Number(item.quantity), unit_cost_cents: Math.round(Number(item.cost) * 100) })),
+    })
+    if (error) { notify('Não foi possível registrar a compra. Confira os itens.'); return false }
+    await loadData(); notify('Compra recebida e estoque atualizado.'); return true
+  }
+
   const navigation = workspace.isPlatformAdmin ? [['Central Anyma', ShieldCheck], ...nav] : nav
 
   return (
@@ -122,14 +162,14 @@ function App({ workspace }) {
           {workspace.isPlatformAdmin && <div className="admin-access-banner"><ShieldCheck size={18}/><div><strong>Acesso global de testes ativo</strong><span>Você está visualizando {workspace.store.name}. Cada troca de loja fica registrada.</span></div></div>}
           {page === 'Central Anyma' && <PlatformCentral workspace={workspace} />}
           {page === 'Visão geral' && <Dashboard products={products} sales={sales} goTo={changePage} />}
-          {page === 'PDV' && <POS products={products} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
+          {page === 'PDV' && <POS products={products} customers={customers} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
           {page === 'Produtos' && <Products products={products} add={addToCart} goTo={changePage} createProduct={createProduct} />}
           {page === 'Estoque' && <Inventory products={products} adjustStock={adjustStock} />}
-          {page === 'Clientes' && <Customers />}
+          {page === 'Clientes' && <Customers customers={customers} createCustomer={createCustomer} />}
           {page === 'Caixa' && <Cashier sales={sales} workspace={workspace} />}
           {page === 'Financeiro' && <Finance sales={sales} />}
           {page === 'Relatórios' && <Reports products={products} sales={sales} />}
-          {page === 'Compras' && <Placeholder icon={ClipboardList} title="Compras e fornecedores" text="Organize pedidos de compra, recebimentos e custos sem perder o histórico." action="Registrar pedido" />}
+          {page === 'Compras' && <Purchases products={products} suppliers={suppliers} purchases={purchases} createSupplier={createSupplier} receivePurchase={receivePurchase} />}
           {page === 'Equipe e acessos' && <Team workspace={workspace} />}
         </div>
       </main>
@@ -169,12 +209,13 @@ function PlatformCentral({ workspace }) {
 
 function Metric({ label, value, note, positive, warning }) { return <article className="metric"><span>{label}</span><strong>{value}</strong><small className={positive ? 'positive' : warning ? 'warning' : ''}>{positive && 'Alta · '}{warning && 'Atenção · '}{note}</small></article> }
 
-function POS({ products, cart, add, setQty, finish }) {
+function POS({ products, customers, cart, add, setQty, finish }) {
   const [query, setQuery] = useState('')
   const [payment, setPayment] = useState('Pix')
+  const [customerId, setCustomerId] = useState('')
   const shown = products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()))
   const total = saleTotal(cart)
-  return <div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><div className="payment"><span>Forma de pagamento</span><div>{['Pix','Crédito','Débito','Dinheiro'].map(type => <button className={payment===type?'selected':''} key={type} onClick={() => setPayment(type)}>{type}</button>)}</div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" onClick={() => finish(payment)}><CheckCircle2/>Finalizar venda</button></>}</aside></div>
+  return <div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><label className="cart-select">Cliente<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Consumidor final</option>{customers.map((customer) => <option value={customer.id} key={customer.id}>{customer.name}</option>)}</select></label><div className="payment"><span>Forma de pagamento</span><div>{['Pix','Crédito','Débito','Dinheiro'].map(type => <button className={payment===type?'selected':''} key={type} onClick={() => setPayment(type)}>{type}</button>)}</div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" onClick={async () => { await finish(payment, customerId); setCustomerId('') }}><CheckCircle2/>Finalizar venda</button></>}</aside></div>
 }
 
 function Products({ products, add, goTo, createProduct }) {
@@ -211,7 +252,54 @@ function StockForm({ onSave }) {
   return <form className="stock-form" onSubmit={(event) => { event.preventDefault(); onSave(delta, reason) }}><label>Quantidade (+ entrada / − saída)<input required type="number" step="1" value={delta} onChange={(event) => setDelta(event.target.value)} /></label><label>Motivo<input required maxLength="240" value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="primary">Registrar</button></form>
 }
 
-function Customers() { return <Placeholder icon={Users} title="Clientes" text="O cadastro de clientes entra no próximo bloco. Nenhum dado fictício é exibido neste ambiente." action="Em desenvolvimento" /> }
+function Customers({ customers, createCustomer }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const shown = customers.filter((customer) => [customer.name, customer.phone, customer.email].some((value) => value.toLowerCase().includes(query.toLowerCase())))
+  return <>
+    {open && <CustomerForm onCancel={() => setOpen(false)} onSave={async (values) => { if (await createCustomer(values)) setOpen(false) }} />}
+    <div className="page-intro"><div><span className="section-label">RELACIONAMENTO</span><h2>Clientes da loja</h2><p>Cadastros reais, vinculados somente a esta loja.</p></div><div className="panel-actions"><label className="search large"><Search size={18}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nome, telefone ou e-mail" /></label><button className="primary" onClick={() => setOpen(true)}><Users size={18}/>Novo cliente</button></div></div>
+    <section className="panel">{!shown.length ? <EmptyState title={query ? 'Nenhum cliente encontrado' : 'Nenhum cliente cadastrado'} text={query ? 'Tente outro nome, telefone ou e-mail.' : 'Cadastre o primeiro cliente para identificá-lo no PDV e manter o histórico de compras.'} action={!query ? 'Cadastrar cliente' : undefined} onAction={() => setOpen(true)} /> : <div className="customer-list">{shown.map((customer) => <article className="customer-record" key={customer.id}><span>{initials(customer.name)}</span><div><strong>{customer.name}</strong><small>{customer.notes || 'Sem observações'}</small></div><div><Phone size={14}/><span>{customer.phone || 'Não informado'}</span></div><div><Mail size={14}/><span>{customer.email || 'Não informado'}</span></div></article>)}</div>}</section>
+  </>
+}
+
+function CustomerForm({ onCancel, onSave }) {
+  const [values, setValues] = useState({ name: '', phone: '', email: '', notes: '' })
+  const [saving, setSaving] = useState(false)
+  const update = (field) => (event) => setValues((current) => ({ ...current, [field]: event.target.value }))
+  return <div className="modal-backdrop"><form className="modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave(values); setSaving(false) }}><div className="panel-head"><div><span className="section-label">CLIENTES</span><h3>Novo cliente</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label>Nome completo<input required minLength="2" maxLength="160" value={values.name} onChange={update('name')} /></label><label>Telefone<input maxLength="30" value={values.phone} onChange={update('phone')} placeholder="(77) 9 9999-9999" /></label><label>E-mail<input type="email" maxLength="180" value={values.email} onChange={update('email')} /></label><label className="wide-field">Observações<input maxLength="500" value={values.notes} onChange={update('notes')} placeholder="Preferências, tamanho ou informação útil" /></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : 'Cadastrar cliente'}</button></div></form></div>
+}
+
+function Purchases({ products, suppliers, purchases, createSupplier, receivePurchase }) {
+  const [purchaseOpen, setPurchaseOpen] = useState(false)
+  const [supplierOpen, setSupplierOpen] = useState(false)
+  return <>
+    {supplierOpen && <SupplierForm onCancel={() => setSupplierOpen(false)} onSave={async (values) => { if (await createSupplier(values)) setSupplierOpen(false) }} />}
+    {purchaseOpen && <PurchaseForm products={products} suppliers={suppliers} onCancel={() => setPurchaseOpen(false)} onSave={async (values) => { if (await receivePurchase(values)) setPurchaseOpen(false) }} />}
+    <div className="page-intro"><div><span className="section-label">ABASTECIMENTO</span><h2>Compras e fornecedores</h2><p>Receba mercadorias com custo, histórico e entrada automática no estoque.</p></div><div className="panel-actions"><button className="secondary" onClick={() => setSupplierOpen(true)}><Truck size={17}/>Novo fornecedor</button><button className="primary" disabled={!products.length || !suppliers.length} onClick={() => setPurchaseOpen(true)}><PackagePlus size={17}/>Registrar compra</button></div></div>
+    {(!products.length || !suppliers.length) && <div className="security-note"><AlertTriangle size={19}/><p>Para registrar uma compra, cadastre pelo menos um produto e um fornecedor. O botão será liberado automaticamente.</p></div>}
+    <section className="purchase-summary"><article><span>Compras registradas</span><strong>{purchases.length}</strong></article><article><span>Total recebido</span><strong>{money(purchases.reduce((sum, purchase) => sum + purchase.total, 0))}</strong></article><article><span>Fornecedores ativos</span><strong>{suppliers.length}</strong></article></section>
+    <section className="panel"><div className="panel-head"><div><span className="section-label">HISTÓRICO</span><h3>Recebimentos recentes</h3></div></div>{!purchases.length ? <EmptyState title="Nenhuma compra registrada" text="A primeira compra recebida aparecerá aqui e atualizará o estoque dos produtos." /> : <div className="purchase-list">{purchases.map((purchase) => <article key={purchase.id}><span className="purchase-id">#{purchase.id.slice(0, 6).toUpperCase()}</span><div><strong>{purchase.supplier}</strong><small>{purchase.document || 'Sem número de documento'}</small></div><span>{purchase.date}</span><strong>{money(purchase.total)}</strong><em>Recebida</em></article>)}</div>}</section>
+  </>
+}
+
+function SupplierForm({ onCancel, onSave }) {
+  const [values, setValues] = useState({ name: '', contact: '', phone: '', email: '' })
+  const [saving, setSaving] = useState(false)
+  const update = (field) => (event) => setValues((current) => ({ ...current, [field]: event.target.value }))
+  return <div className="modal-backdrop"><form className="modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave(values); setSaving(false) }}><div className="panel-head"><div><span className="section-label">FORNECEDORES</span><h3>Novo fornecedor</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label>Empresa / fornecedor<input required minLength="2" maxLength="160" value={values.name} onChange={update('name')} /></label><label>Pessoa de contato<input maxLength="120" value={values.contact} onChange={update('contact')} /></label><label>Telefone<input maxLength="30" value={values.phone} onChange={update('phone')} /></label><label>E-mail<input type="email" maxLength="180" value={values.email} onChange={update('email')} /></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : 'Cadastrar fornecedor'}</button></div></form></div>
+}
+
+function PurchaseForm({ products, suppliers, onCancel, onSave }) {
+  const [supplierId, setSupplierId] = useState(suppliers[0]?.id || '')
+  const [document, setDocument] = useState('')
+  const [notes, setNotes] = useState('')
+  const [items, setItems] = useState([{ productId: products[0]?.id || '', quantity: '1', cost: products[0]?.cost?.toFixed(2) || '0.00' }])
+  const [saving, setSaving] = useState(false)
+  const updateItem = (index, field, value) => setItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item))
+  const total = purchaseTotal(items)
+  return <div className="modal-backdrop"><form className="modal purchase-modal" onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSave({ supplierId, document, notes, items }); setSaving(false) }}><div className="panel-head"><div><span className="section-label">ENTRADA DE MERCADORIA</span><h3>Registrar compra recebida</h3></div><button type="button" className="icon-btn" onClick={onCancel}><X/></button></div><div className="form-grid"><label>Fornecedor<select required value={supplierId} onChange={(event) => setSupplierId(event.target.value)}>{suppliers.map((supplier) => <option value={supplier.id} key={supplier.id}>{supplier.name}</option>)}</select></label><label>Número da nota/pedido<input maxLength="80" value={document} onChange={(event) => setDocument(event.target.value)} /></label></div><div className="purchase-items"><div className="purchase-items-head"><strong>Itens recebidos</strong><button type="button" className="secondary" onClick={() => setItems((current) => [...current, { productId: products[0]?.id || '', quantity: '1', cost: products[0]?.cost?.toFixed(2) || '0.00' }])}><Plus size={15}/>Adicionar item</button></div>{items.map((item, index) => <div className="purchase-item" key={index}><label>Produto<select required value={item.productId} onChange={(event) => updateItem(index, 'productId', event.target.value)}>{products.map((product) => <option value={product.id} key={product.id}>{product.name} · {product.sku}</option>)}</select></label><label>Quantidade<input required min="1" step="1" type="number" value={item.quantity} onChange={(event) => updateItem(index, 'quantity', event.target.value)} /></label><label>Custo unitário<input required min="0" step="0.01" type="number" value={item.cost} onChange={(event) => updateItem(index, 'cost', event.target.value)} /></label><button type="button" className="icon-btn" disabled={items.length === 1} onClick={() => setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X/></button></div>)}</div><label className="modal-note">Observações<input maxLength="500" value={notes} onChange={(event) => setNotes(event.target.value)} /></label><div className="purchase-total"><span>Total da compra</span><strong>{money(total)}</strong></div><div className="modal-actions"><button type="button" className="secondary" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Registrando...' : 'Confirmar recebimento'}</button></div></form></div>
+}
 
 function Cashier({ sales, workspace }) { const total = sales.reduce((s,v)=>s+v.total,0); return <><div className="cash-hero"><div><span className="live-dot">Movimento registrado</span><h2>Vendas de {workspace.store.name}</h2><p>Operador atual: {workspace.profile?.full_name}</p></div><div><span>Total das vendas carregadas</span><strong>{money(total)}</strong><small>sem valor fictício de abertura</small></div></div><section className="panel"><div className="panel-head"><h3>Movimentações recentes</h3><span className="pill">{sales.length} vendas</span></div><SalesTable sales={sales}/></section></> }
 
@@ -234,6 +322,10 @@ function mapProduct(row) {
 function mapSale(row) {
   const soldAt = new Date(row.sold_at)
   return { id: `#${row.id.slice(0, 6).toUpperCase()}`, time: soldAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), customer: row.customer_name, payment: row.payment_method, total: row.total_cents / 100, status: 'Concluída', soldAt }
+}
+
+function mapPurchase(row) {
+  return { id: row.id, supplier: row.supplier_name, document: row.document_number, total: row.total_cents / 100, date: new Date(row.received_at).toLocaleDateString('pt-BR') }
 }
 
 function lastSevenDays(sales) {
