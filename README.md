@@ -24,4 +24,8 @@ npm test
 npm run build
 ```
 
+## Publicação
+
+O repositório está vinculado ao Netlify. Alterações em branches de pull request devem gerar Deploy Previews para validação antes do merge.
+
 Esta entrega usa dados demonstrativos no navegador. Não insira dados reais antes da implementação do banco, autenticação e isolamento entre lojas.
