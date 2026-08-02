@@ -19,4 +19,12 @@ export const cashExpected = (opening, movements = []) => movements.reduce((total
   return total
 }, opening)
 
+export const cashRemoved = (counted, nextOpening) => Number(counted || 0) - Number(nextOpening || 0)
+
+export const cashDifferenceLabel = (difference) => {
+  if (Number(difference) > 0) return 'Sobra'
+  if (Number(difference) < 0) return 'Falta'
+  return 'Sem diferença'
+}
+
 export const lowStock = (products) => products.filter((product) => product.stock <= product.min)

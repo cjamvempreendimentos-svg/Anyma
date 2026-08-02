@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cashExpected, lowStock, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './format'
+import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './format'
 
 describe('regras comerciais', () => {
   it('calcula o total do carrinho', () => {
@@ -25,5 +25,12 @@ describe('regras comerciais', () => {
     expect(paymentTotal(payments)).toBe(100)
     expect(paymentsMatchTotal(payments, 100)).toBe(true)
     expect(paymentsMatchTotal(payments, 99.99)).toBe(false)
+  })
+
+  it('separa fundo seguinte, retirada e divergência do fechamento', () => {
+    expect(cashRemoved(90, 20)).toBe(70)
+    expect(cashDifferenceLabel(-10)).toBe('Falta')
+    expect(cashDifferenceLabel(10)).toBe('Sobra')
+    expect(cashDifferenceLabel(0)).toBe('Sem diferença')
   })
 })
