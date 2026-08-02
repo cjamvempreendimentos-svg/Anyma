@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lowStock, purchaseTotal, saleTotal } from './format'
+import { cashExpected, lowStock, purchaseTotal, saleTotal } from './format'
 
 describe('regras comerciais', () => {
   it('calcula o total do carrinho', () => {
@@ -12,5 +12,11 @@ describe('regras comerciais', () => {
 
   it('calcula o total de uma compra recebida', () => {
     expect(purchaseTotal([{ cost: '12.50', quantity: '3' }, { cost: '8', quantity: '2' }])).toBe(53.5)
+  })
+
+  it('calcula o saldo físico esperado do caixa', () => {
+    expect(cashExpected(100, [
+      { type: 'sale', amount: 80 }, { type: 'supply', amount: 20 }, { type: 'withdrawal', amount: 35 },
+    ])).toBe(165)
   })
 })
