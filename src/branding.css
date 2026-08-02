@@ -1,0 +1,75 @@
+.sidebar {
+  overflow-y: auto;
+}
+
+.brand {
+  flex-shrink: 0;
+}
+
+.developer-credit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px 1px;
+  color: #878c81;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.developer-credit a {
+  width: max-content;
+  color: #b8bdaf;
+  font-size: 9px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.developer-credit a:hover {
+  color: var(--lime);
+}
+
+.sidebar nav {
+  padding-top: 10px;
+}
+
+.welcome-store {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.store-logo {
+  display: grid;
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  overflow: hidden;
+  color: #5f6840;
+  background: #f8f8f1;
+}
+
+.store-logo img {
+  width: 100%;
+  height: 100%;
+  padding: 7px;
+  object-fit: contain;
+}
+
+.store-logo svg {
+  width: 30px;
+  height: 30px;
+}
+
+@media (max-width: 780px) {
+  .welcome-store {
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .store-logo {
+    width: 58px;
+    height: 58px;
+  }
+}
