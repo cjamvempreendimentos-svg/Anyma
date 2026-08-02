@@ -27,4 +27,4 @@ export const cashDifferenceLabel = (difference) => {
   return 'Sem diferença'
 }
 
-export const lowStock = (products) => products.filter((product) => product.stock <= product.min)
+export const lowStock = (products) => products.filter((product) => product.active !== false && product.stock <= product.min)
