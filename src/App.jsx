@@ -6,7 +6,7 @@ import {
   AlertTriangle, ArrowUpRight, ShieldCheck, Building2, Truck, Phone, Mail, LockKeyhole,
   Banknote, ArrowDownToLine, ArrowUpFromLine, CalendarClock,
 } from 'lucide-react'
-import { cashExpected, lowStock, money, purchaseTotal, saleTotal } from './lib/format'
+import { cashExpected, lowStock, money, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './lib/format'
 import { supabase } from './lib/supabase'
 
 const nav = [
@@ -76,21 +76,21 @@ function App({ workspace }) {
 
   const activeCash = cashSessions.find((session) => session.status === 'open' && session.operatorId === workspace.profile?.user_id)
 
-  const finishSale = async (payment, customerId) => {
+  const finishSale = async (payments, customerId) => {
     if (!cart.length) return
     if (!activeCash) { notify('Abra seu turno no menu Caixa antes de vender.'); return false }
     const total = saleTotal(cart)
-    const { error } = await supabase.rpc('complete_sale_v3', {
+    const { error } = await supabase.rpc('complete_sale_v4', {
       p_store_id: workspace.store.id,
       p_cash_session_id: activeCash.id,
-      p_payment_method: payment,
+      p_payments: payments.map((payment) => ({ method: payment.method, amount_cents: Math.round(Number(payment.amount) * 100) })),
       p_customer_id: customerId || null,
       p_items: cart.map((item) => ({ product_id: item.id, quantity: item.qty })),
     })
     if (error) return notify(error.message.includes('Estoque insuficiente') ? error.message : 'Não foi possível concluir a venda.')
     setCart([])
     await loadData()
-    notify(`Venda de ${money(total)} concluída em ${payment}.`); return true
+    notify(`Venda de ${money(total)} concluída com ${payments.length > 1 ? 'pagamento dividido' : payments[0].method}.`); return true
   }
 
   const createProduct = async (values) => {
@@ -260,11 +260,18 @@ function Metric({ label, value, note, positive, warning }) { return <article cla
 
 function POS({ products, customers, activeCash, cart, add, setQty, finish }) {
   const [query, setQuery] = useState('')
-  const [payment, setPayment] = useState('Pix')
+  const [payments, setPayments] = useState([{ method: 'Pix', amount: '' }])
   const [customerId, setCustomerId] = useState('')
   const shown = products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()))
   const total = saleTotal(cart)
-  return <>{!activeCash && <div className="security-note"><LockKeyhole size={19}/><p>Seu turno está fechado. Abra o caixa antes de concluir uma venda.</p></div>}<div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><label className="cart-select">Cliente<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Consumidor final</option>{customers.map((customer) => <option value={customer.id} key={customer.id}>{customer.name}</option>)}</select></label><div className="payment"><span>Forma de pagamento</span><div>{['Pix','Crédito','Débito','Dinheiro'].map(type => <button className={payment===type?'selected':''} key={type} onClick={() => setPayment(type)}>{type}</button>)}</div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" disabled={!activeCash} onClick={async () => { if (await finish(payment, customerId)) setCustomerId('') }}><CheckCircle2/>Finalizar venda</button></>}</aside></div></>
+  useEffect(() => {
+    if (payments.length === 1) setPayments([{ ...payments[0], amount: total ? total.toFixed(2) : '' }])
+  }, [total])
+  const paid = paymentTotal(payments)
+  const paymentValid = paymentsMatchTotal(payments, total)
+  const updatePayment = (index, field, value) => setPayments((current) => current.map((payment, paymentIndex) => paymentIndex === index ? { ...payment, [field]: value } : payment))
+  const availableMethods = (currentIndex) => ['Pix','Crédito','Débito','Dinheiro'].filter((method) => !payments.some((payment, index) => index !== currentIndex && payment.method === method))
+  return <>{!activeCash && <div className="security-note"><LockKeyhole size={19}/><p>Seu turno está fechado. Abra o caixa antes de concluir uma venda.</p></div>}<div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><label className="cart-select">Cliente<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Consumidor final</option>{customers.map((customer) => <option value={customer.id} key={customer.id}>{customer.name}</option>)}</select></label><div className="split-payment"><div className="split-payment-head"><span>Pagamentos</span><button type="button" className="text-btn" disabled={payments.length === 4} onClick={() => { const nextMethod = ['Pix','Crédito','Débito','Dinheiro'].find((method) => !payments.some((payment) => payment.method === method)); setPayments((current) => [...current, { method: nextMethod, amount: '' }]) }}><Plus size={14}/>Dividir pagamento</button></div>{payments.map((payment, index) => <div className="payment-row" key={`${payment.method}-${index}`}><select value={payment.method} onChange={(event) => updatePayment(index, 'method', event.target.value)}>{availableMethods(index).map((method) => <option key={method}>{method}</option>)}</select><label>R$<input required min="0.01" step="0.01" type="number" value={payment.amount} onChange={(event) => updatePayment(index, 'amount', event.target.value)} /></label>{payments.length > 1 && <button type="button" className="icon-btn" title="Remover pagamento" onClick={() => setPayments((current) => current.filter((_, paymentIndex) => paymentIndex !== index))}><X/></button>}</div>)}<div className={paymentValid ? 'payment-balance matched' : 'payment-balance'}><span>Informado {money(paid)}</span><b>{paymentValid ? 'Total conferido' : `Falta ${money(total - paid)}`}</b></div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" disabled={!activeCash || !paymentValid} onClick={async () => { if (await finish(payments, customerId)) { setCustomerId(''); setPayments([{ method: 'Pix', amount: '' }]) } }}><CheckCircle2/>Finalizar venda</button></>}</aside></div></>
 }
 
 function Products({ products, add, goTo, createProduct }) {
@@ -357,15 +364,19 @@ function Cashier({ workspace, activeCash, sessions, movements, openCash, moveCas
   const [openModal, setOpenModal] = useState(false)
   const [moveType, setMoveType] = useState(null)
   const [closeModal, setCloseModal] = useState(false)
-  const sessionMovements = activeCash ? movements.filter((movement) => movement.sessionId === activeCash.id) : []
-  const expected = activeCash ? cashExpected(activeCash.opening, sessionMovements) : 0
+  const [selectedSessionId, setSelectedSessionId] = useState(activeCash?.id || sessions[0]?.id || '')
+  useEffect(() => { if (activeCash) setSelectedSessionId(activeCash.id); else if (!selectedSessionId && sessions[0]) setSelectedSessionId(sessions[0].id) }, [activeCash?.id, sessions[0]?.id])
+  const selectedSession = sessions.find((session) => session.id === selectedSessionId) || activeCash || sessions[0]
+  const sessionMovements = selectedSession ? movements.filter((movement) => movement.sessionId === selectedSession.id) : []
+  const activeMovements = activeCash ? movements.filter((movement) => movement.sessionId === activeCash.id) : []
+  const expected = activeCash ? cashExpected(activeCash.opening, activeMovements) : 0
   return <>
     {openModal && <CashOpenForm onCancel={() => setOpenModal(false)} onSave={async (amount) => { if (await openCash(amount)) setOpenModal(false) }} />}
     {moveType && <CashMovementForm type={moveType} onCancel={() => setMoveType(null)} onSave={async (amount, description) => { if (await moveCash(moveType, amount, description)) setMoveType(null) }} />}
     {closeModal && <CashCloseForm expected={expected} onCancel={() => setCloseModal(false)} onSave={async (amount, notes) => { if (await closeCash(amount, notes)) setCloseModal(false) }} />}
     <div className="cash-hero"><div><span className="live-dot">{activeCash ? 'Turno aberto' : 'Turno fechado'}</span><h2>Caixa de {workspace.store.name}</h2><p>Operador: {workspace.profile?.full_name}</p></div><div><span>{activeCash ? 'Dinheiro esperado' : 'Último fechamento'}</span><strong>{money(activeCash ? expected : (sessions[0]?.closing || 0))}</strong><small>{activeCash ? `aberto às ${activeCash.openedTime}` : sessions[0]?.closedDate || 'nenhum turno encerrado'}</small></div><div className="cash-actions">{activeCash ? <><button onClick={() => setMoveType('supply')}><ArrowDownToLine size={16}/>Reforço</button><button onClick={() => setMoveType('withdrawal')}><ArrowUpFromLine size={16}/>Sangria</button><button onClick={() => setCloseModal(true)}><LockKeyhole size={16}/>Fechar</button></> : <button onClick={() => setOpenModal(true)}><Banknote size={16}/>Abrir turno</button>}</div></div>
-    <section className="metrics"><Metric label="Abertura" value={money(activeCash?.opening || 0)} note="Fundo inicial"/><Metric label="Vendas em dinheiro" value={money(sessionMovements.filter((m) => m.type === 'sale').reduce((s,m)=>s+m.amount,0))} note="Neste turno" positive/><Metric label="Reforços" value={money(sessionMovements.filter((m) => m.type === 'supply').reduce((s,m)=>s+m.amount,0))} note="Entradas manuais"/><Metric label="Sangrias" value={money(sessionMovements.filter((m) => m.type === 'withdrawal').reduce((s,m)=>s+m.amount,0))} note="Retiradas registradas" warning/></section>
-    <section className="panel"><div className="panel-head"><div><span className="section-label">AUDITORIA DO TURNO</span><h3>Movimentações do caixa</h3></div><span className="pill">{sessionMovements.length} registros</span></div>{!activeCash ? <EmptyState title="Caixa fechado" text="Abra seu turno informando o fundo inicial antes de começar as vendas." action="Abrir caixa" onAction={() => setOpenModal(true)} /> : !sessionMovements.length ? <EmptyState title="Nenhuma movimentação" text="Vendas em dinheiro, reforços e sangrias aparecerão aqui." /> : <div className="cash-movement-list">{sessionMovements.map((movement) => <article key={movement.id}><span className={`movement-icon ${movement.type}`} >{movement.type === 'withdrawal' ? <ArrowUpFromLine/> : <ArrowDownToLine/>}</span><div><strong>{cashMovementLabel(movement.type)}</strong><small>{movement.description} · {movement.time}</small></div><b className={movement.type === 'withdrawal' ? 'negative' : ''}>{movement.type === 'withdrawal' ? '−' : '+'}{money(movement.amount)}</b></article>)}</div>}</section>
+    {selectedSession && <section className="metrics"><Metric label="Abertura" value={money(selectedSession.opening)} note="Fundo inicial"/><Metric label="Esperado" value={money(selectedSession.status === 'open' ? cashExpected(selectedSession.opening, sessionMovements) : selectedSession.expected)} note="Dinheiro físico calculado"/><Metric label="Contado" value={selectedSession.status === 'closed' ? money(selectedSession.closing) : 'Em aberto'} note="Informado no fechamento"/><Metric label="Diferença" value={selectedSession.status === 'closed' ? money(selectedSession.difference) : 'Em aberto'} note={selectedSession.status === 'closed' ? 'Contado menos esperado' : 'Será calculada ao fechar'} warning={selectedSession.difference !== 0}/></section>}
+    <section className="cash-history-layout"><article className="panel"><div className="panel-head"><div><span className="section-label">HISTÓRICO PERMANENTE</span><h3>Turnos de caixa</h3></div><span className="pill">{sessions.length} turnos</span></div>{!sessions.length ? <EmptyState title="Nenhum turno registrado" text="Abra o primeiro caixa para iniciar o histórico." action="Abrir caixa" onAction={() => setOpenModal(true)} /> : <div className="cash-session-list">{sessions.map((session) => <button className={session.id === selectedSession?.id ? 'selected' : ''} key={session.id} onClick={() => setSelectedSessionId(session.id)}><span><b>{session.status === 'open' ? 'Turno aberto' : 'Turno fechado'}</b><small>{session.openedDate}</small></span><strong>{session.status === 'open' ? money(cashExpected(session.opening, movements.filter((movement) => movement.sessionId === session.id))) : money(session.closing)}</strong>{session.status === 'closed' && <em className={session.difference === 0 ? '' : 'negative'}>{session.difference === 0 ? 'Sem diferença' : `Diferença ${money(session.difference)}`}</em>}</button>)}</div>}</article><article className="panel"><div className="panel-head"><div><span className="section-label">AUDITORIA DO TURNO</span><h3>Movimentações</h3></div><span className="pill">{sessionMovements.length} registros</span></div>{!selectedSession ? <EmptyState title="Selecione um turno" text="As movimentações aparecerão aqui." /> : !sessionMovements.length ? <EmptyState title="Nenhuma movimentação" text="Este turno não teve vendas em dinheiro, reforços ou sangrias." /> : <div className="cash-movement-list">{sessionMovements.map((movement) => <article key={movement.id}><span className={`movement-icon ${movement.type}`} >{movement.type === 'withdrawal' ? <ArrowUpFromLine/> : <ArrowDownToLine/>}</span><div><strong>{cashMovementLabel(movement.type)}</strong><small>{movement.description} · {movement.dateTime}</small></div><b className={movement.type === 'withdrawal' ? 'negative' : ''}>{movement.type === 'withdrawal' ? '−' : '+'}{money(movement.amount)}</b></article>)}</div>}{selectedSession?.notes && <div className="cash-notes"><strong>Observações do fechamento</strong><p>{selectedSession.notes}</p></div>}</article></section>
   </>
 }
 
@@ -410,11 +421,12 @@ function mapPurchase(row) {
 
 function mapCashSession(row) {
   const opened = new Date(row.opened_at)
-  return { id: row.id, operatorId: row.operator_id, status: row.status, opening: row.opening_amount_cents / 100, closing: (row.closing_amount_cents || 0) / 100, expected: (row.expected_amount_cents || 0) / 100, difference: (row.difference_cents || 0) / 100, openedTime: opened.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), closedDate: row.closed_at ? new Date(row.closed_at).toLocaleString('pt-BR') : '' }
+  return { id: row.id, operatorId: row.operator_id, status: row.status, opening: row.opening_amount_cents / 100, closing: (row.closing_amount_cents || 0) / 100, expected: (row.expected_amount_cents || 0) / 100, difference: (row.difference_cents || 0) / 100, notes: row.notes, openedTime: opened.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), openedDate: opened.toLocaleString('pt-BR'), closedDate: row.closed_at ? new Date(row.closed_at).toLocaleString('pt-BR') : '' }
 }
 
 function mapCashMovement(row) {
-  return { id: row.id, sessionId: row.cash_session_id, type: row.movement_type, amount: row.amount_cents / 100, description: row.description, time: new Date(row.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
+  const createdAt = new Date(row.created_at)
+  return { id: row.id, sessionId: row.cash_session_id, type: row.movement_type, amount: row.amount_cents / 100, description: row.description, time: createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), dateTime: createdAt.toLocaleString('pt-BR') }
 }
 
 function mapFinancialEntry(row) {

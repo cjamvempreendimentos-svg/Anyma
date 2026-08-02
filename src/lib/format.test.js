@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cashExpected, lowStock, purchaseTotal, saleTotal } from './format'
+import { cashExpected, lowStock, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './format'
 
 describe('regras comerciais', () => {
   it('calcula o total do carrinho', () => {
@@ -18,5 +18,12 @@ describe('regras comerciais', () => {
     expect(cashExpected(100, [
       { type: 'sale', amount: 80 }, { type: 'supply', amount: 20 }, { type: 'withdrawal', amount: 35 },
     ])).toBe(165)
+  })
+
+  it('valida pagamento dividido pelo total exato da venda', () => {
+    const payments = [{ method: 'Dinheiro', amount: '30.00' }, { method: 'Pix', amount: '70.00' }]
+    expect(paymentTotal(payments)).toBe(100)
+    expect(paymentsMatchTotal(payments, 100)).toBe(true)
+    expect(paymentsMatchTotal(payments, 99.99)).toBe(false)
   })
 })
