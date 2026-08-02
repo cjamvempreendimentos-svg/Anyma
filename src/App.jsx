@@ -284,6 +284,10 @@ function App({ workspace }) {
       <aside className={menuOpen ? 'sidebar open' : 'sidebar'}>
         <button className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Fechar menu"><X /></button>
         <div className="brand"><span className="brand-mark">A</span><div><strong>ANYMA</strong><small>gestão para lojas</small></div></div>
+        <div className="developer-credit">
+          <span>Desenvolvido por Camacho Tecnologia</span>
+          <a href="https://wa.me/5571992438726" target="_blank" rel="noreferrer">(71) 9.9243-8726</a>
+        </div>
         <nav>{navigation.map(([label, Icon]) => <button key={label} className={page === label ? 'active' : ''} onClick={() => changePage(label)}><Icon size={19}/><span>{label}</span>{label === 'Estoque' && lowStock(products).length > 0 && <b>{lowStock(products).length}</b>}</button>)}</nav>
         <div className="sidebar-bottom"><div className="store-card"><Store size={18}/><div><strong>{workspace.store.name}</strong><span>{roleLabel(workspace.role)}</span></div></div>{workspace.isPlatformAdmin && <label className="store-switcher"><span>LOJA EM TESTE</span><select value={workspace.store.id} onChange={(event) => workspace.switchStore(event.target.value)}>{workspace.stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<button className="settings"><Settings size={18}/>Configurações</button></div>
       </aside>
@@ -300,7 +304,7 @@ function App({ workspace }) {
           {dataLoading && <div className="loading-line" />}
           {workspace.isPlatformAdmin && <div className="admin-access-banner"><ShieldCheck size={18}/><div><strong>Acesso global de testes ativo</strong><span>Você está visualizando {workspace.store.name}. Cada troca de loja fica registrada.</span></div></div>}
           {page === 'Central Anyma' && <PlatformCentral workspace={workspace} />}
-          {page === 'Visão geral' && <Dashboard products={products} sales={sales} activeCash={activeCash} goTo={changePage} />}
+          {page === 'Visão geral' && <Dashboard store={workspace.store} products={products} sales={sales} activeCash={activeCash} goTo={changePage} />}
           {page === 'PDV' && <POS products={products.filter((product) => product.active)} customers={customers} activeCash={activeCash} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
           {page === 'Produtos' && <Products products={products} suppliers={suppliers} add={addToCart} goTo={changePage} createProduct={createProduct} updateProduct={updateProduct} createSupplier={createSupplier} canManage={hasCapability(workspace.role, 'management')} />}
           {page === 'Estoque' && <Inventory products={products.filter((product) => product.active)} movements={inventoryMovements} adjustStock={adjustStock} canManage={hasCapability(workspace.role, 'management')} />}
@@ -317,13 +321,21 @@ function App({ workspace }) {
   )
 }
 
-function Dashboard({ products, sales, activeCash, goTo }) {
+function Dashboard({ store, products, sales, activeCash, goTo }) {
   const revenue = sales.reduce((sum, sale) => sum + sale.total, 0)
   const alerts = lowStock(products)
   const chartData = lastSevenDays(sales)
   const max = Math.max(1, ...chartData.map((item) => item.value))
   return <>
-    <section className="welcome"><div><span className="live-dot">{activeCash ? 'Caixa aberto' : 'Caixa fechado'}</span><h2>O pulso da sua loja, agora.</h2><p>Vendas, estoque e decisões importantes reunidas numa leitura simples.</p></div><button className="primary" onClick={() => goTo(activeCash ? 'PDV' : 'Caixa')}>{activeCash ? <ShoppingCart size={18}/> : <LockKeyhole size={18}/>}{activeCash ? 'Nova venda' : 'Abrir caixa'}</button></section>
+    <section className="welcome">
+      <div className="welcome-store">
+        <div className="store-logo" aria-label={`Logo da ${store.name}`}>
+          {store.logo_url ? <img src={store.logo_url} alt={`Logo da ${store.name}`} /> : <Store aria-hidden="true" />}
+        </div>
+        <div><span className="live-dot">{activeCash ? 'Caixa aberto' : 'Caixa fechado'}</span><h2>Bem-vinda à {store.name}.</h2><p>Vendas, estoque e decisões importantes reunidas numa leitura simples.</p></div>
+      </div>
+      <button className="primary" onClick={() => goTo(activeCash ? 'PDV' : 'Caixa')}>{activeCash ? <ShoppingCart size={18}/> : <LockKeyhole size={18}/>}{activeCash ? 'Nova venda' : 'Abrir caixa'}</button>
+    </section>
     <section className="metrics">
       <Metric label="Vendas carregadas" value={money(revenue)} note="Dados reais da loja" positive={revenue > 0} />
       <Metric label="Ticket médio" value={money(sales.length ? revenue / sales.length : 0)} note={`${sales.length} vendas concluídas`} />

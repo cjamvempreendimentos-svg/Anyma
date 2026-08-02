@@ -38,8 +38,8 @@ export default function AuthGate({ children }) {
 
       const isPlatformAdmin = Boolean(administrator)
       const { data: memberships, error } = isPlatformAdmin
-        ? await supabase.from('stores').select('id, name, slug').eq('active', true).order('name')
-        : await supabase.from('store_members').select('role, stores(id, name, slug)').eq('user_id', userId).eq('active', true).limit(1)
+        ? await supabase.from('stores').select('id, name, slug, logo_url').eq('active', true).order('name')
+        : await supabase.from('store_members').select('role, stores(id, name, slug, logo_url)').eq('user_id', userId).eq('active', true).limit(1)
 
       const stores = isPlatformAdmin ? (memberships || []) : (memberships || []).map((item) => item.stores)
       const store = stores[0]
