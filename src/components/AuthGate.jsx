@@ -67,7 +67,8 @@ export default function AuthGate({ children }) {
 }
 
 function AuthScreen() {
-  const [mode, setMode] = useState('login')
+  const inviteToken = new URLSearchParams(window.location.search).get('invite') || ''
+  const [mode, setMode] = useState(inviteToken ? 'invite' : 'login')
   const [form, setForm] = useState(initialForm)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -82,12 +83,14 @@ function AuthScreen() {
       : await supabase.auth.signUp({
           email: form.email.trim(),
           password: form.password,
-          options: { data: { full_name: form.fullName.trim(), store_name: form.storeName.trim() } },
+          options: { data: mode === 'invite'
+            ? { full_name: form.fullName.trim(), invite_token: inviteToken }
+            : { full_name: form.fullName.trim(), store_name: form.storeName.trim() } },
         })
     setLoading(false)
     if (result.error) return setError(translateAuthError(result.error.message))
-    if (mode === 'signup' && !result.data.session) {
-      setMessage('Conta criada. Abra o e-mail de confirmação para entrar na Anyma.')
+    if (mode !== 'login' && !result.data.session) {
+      setMessage(mode === 'invite' ? 'Acesso criado. Confirme seu e-mail para entrar na equipe.' : 'Conta criada. Abra o e-mail de confirmação para entrar na Anyma.')
     }
   }
 
@@ -100,20 +103,21 @@ function AuthScreen() {
     <main className="auth-main">
       <form className="auth-card" onSubmit={submit}>
         <span className="auth-icon"><LockKeyhole /></span>
-        <h2>{mode === 'login' ? 'Entrar na Anyma' : 'Criar minha primeira loja'}</h2>
-        <p>{mode === 'login' ? 'Use seu e-mail e senha para acessar.' : 'Você será o proprietário desta loja.'}</p>
-        {mode === 'signup' && <>
+        <h2>{mode === 'login' ? 'Entrar na Anyma' : mode === 'invite' ? 'Entrar para a equipe' : 'Criar minha primeira loja'}</h2>
+        <p>{mode === 'login' ? 'Use seu e-mail e senha para acessar.' : mode === 'invite' ? 'Use exatamente o e-mail que recebeu o convite.' : 'Você será o proprietário desta loja.'}</p>
+        {mode !== 'login' && <>
           <label>Seu nome<input required value={form.fullName} onChange={update('fullName')} autoComplete="name" /></label>
-          <label>Nome da loja<input required value={form.storeName} onChange={update('storeName')} /></label>
+          {mode === 'signup' && <label>Nome da loja<input required value={form.storeName} onChange={update('storeName')} /></label>}
         </>}
         <label>E-mail<input required type="email" value={form.email} onChange={update('email')} autoComplete="email" /></label>
         <label>Senha<input required minLength="8" type="password" value={form.password} onChange={update('password')} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>
         {error && <div className="form-error">{error}</div>}
         {message && <div className="form-success"><CheckCircle2 />{message}</div>}
-        <button className="primary auth-submit" disabled={loading}>{loading && <LoaderCircle className="spin"/>}{mode === 'login' ? 'Entrar' : 'Criar loja'}</button>
-        <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setMessage('') }}>
+        <button className="primary auth-submit" disabled={loading}>{loading && <LoaderCircle className="spin"/>}{mode === 'login' ? 'Entrar' : mode === 'invite' ? 'Aceitar convite' : 'Criar loja'}</button>
+        {!inviteToken && <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setMessage('') }}>
           {mode === 'login' ? 'Primeiro acesso? Criar conta' : 'Já tenho conta? Entrar'}
-        </button>
+        </button>}
+        {inviteToken && <button type="button" className="auth-switch" onClick={() => { window.history.replaceState({}, '', window.location.pathname); setMode('login'); setError(''); setMessage('') }}>Já tenho acesso? Entrar</button>}
       </form>
     </main>
   </div>
