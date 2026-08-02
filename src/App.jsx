@@ -3,7 +3,7 @@ import {
   BadgeDollarSign, BarChart3, Boxes, ChevronDown, CircleUserRound, ClipboardList,
   CreditCard, LayoutDashboard, Menu, PackagePlus, ReceiptText, Search, Settings,
   ShoppingBag, ShoppingCart, Store, Users, WalletCards, X, Minus, Plus, CheckCircle2,
-  AlertTriangle, ArrowUpRight, Sparkles,
+  AlertTriangle, ArrowUpRight, Sparkles, ShieldCheck, Building2,
 } from 'lucide-react'
 import { lowStock, money, saleTotal } from './lib/format'
 import { supabase } from './lib/supabase'
@@ -98,13 +98,15 @@ function App({ workspace }) {
     await loadData(); notify('Movimentação de estoque registrada.'); return true
   }
 
+  const navigation = workspace.isPlatformAdmin ? [['Central Anyma', ShieldCheck], ...nav] : nav
+
   return (
     <div className="app-shell">
       <aside className={menuOpen ? 'sidebar open' : 'sidebar'}>
         <button className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Fechar menu"><X /></button>
         <div className="brand"><span className="brand-mark">A</span><div><strong>ANYMA</strong><small>gestão para lojas</small></div></div>
-        <nav>{nav.map(([label, Icon]) => <button key={label} className={page === label ? 'active' : ''} onClick={() => changePage(label)}><Icon size={19}/><span>{label}</span>{label === 'Estoque' && lowStock(products).length > 0 && <b>{lowStock(products).length}</b>}</button>)}</nav>
-        <div className="sidebar-bottom"><div className="store-card"><Store size={18}/><div><strong>{workspace.store.name}</strong><span>{roleLabel(workspace.role)}</span></div></div><button className="settings"><Settings size={18}/>Configurações</button></div>
+        <nav>{navigation.map(([label, Icon]) => <button key={label} className={page === label ? 'active' : ''} onClick={() => changePage(label)}><Icon size={19}/><span>{label}</span>{label === 'Estoque' && lowStock(products).length > 0 && <b>{lowStock(products).length}</b>}</button>)}</nav>
+        <div className="sidebar-bottom"><div className="store-card"><Store size={18}/><div><strong>{workspace.store.name}</strong><span>{roleLabel(workspace.role)}</span></div></div>{workspace.isPlatformAdmin && <label className="store-switcher"><span>LOJA EM TESTE</span><select value={workspace.store.id} onChange={(event) => workspace.switchStore(event.target.value)}>{workspace.stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<button className="settings"><Settings size={18}/>Configurações</button></div>
       </aside>
       {menuOpen && <button className="scrim" onClick={() => setMenuOpen(false)} aria-label="Fechar menu" />}
 
@@ -117,6 +119,8 @@ function App({ workspace }) {
 
         <div className="content">
           {dataLoading && <div className="loading-line" />}
+          {workspace.isPlatformAdmin && <div className="admin-access-banner"><ShieldCheck size={18}/><div><strong>Acesso global de testes ativo</strong><span>Você está visualizando {workspace.store.name}. Cada troca de loja fica registrada.</span></div></div>}
+          {page === 'Central Anyma' && <PlatformCentral workspace={workspace} />}
           {page === 'Visão geral' && <Dashboard products={products} sales={sales} goTo={changePage} />}
           {page === 'PDV' && <POS products={products} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
           {page === 'Produtos' && <Products products={products} add={addToCart} goTo={changePage} createProduct={createProduct} />}
@@ -152,6 +156,14 @@ function Dashboard({ products, sales, goTo }) {
       <article className="panel attention"><div className="panel-head"><div><span className="section-label">ATENÇÃO AGORA</span><h3>O que pede uma decisão</h3></div><span className="count">{alerts.length}</span></div>{alerts.map(item => <div className="alert-row" key={item.id}><span className="product-swatch" style={{background:item.color}}/><div><strong>{item.name}</strong><span>{item.stock} un. · mínimo {item.min}</span></div><button onClick={() => goTo('Estoque')}>Repor</button></div>)}<div className="insight"><Sparkles size={18}/><p><strong>Leitura Anyma</strong> A Camisa Essencial tem giro alto e pode acabar antes do próximo fim de semana.</p></div></article>
     </section>
     <section className="panel"><div className="panel-head"><div><span className="section-label">MOVIMENTO RECENTE</span><h3>Últimas vendas</h3></div><button className="text-btn" onClick={() => goTo('Caixa')}>Abrir caixa <ArrowUpRight size={16}/></button></div><SalesTable sales={sales.slice(0,4)} /></section>
+  </>
+}
+
+function PlatformCentral({ workspace }) {
+  return <>
+    <section className="platform-hero"><div><span className="section-label">CAMACHO TECNOLOGIA</span><h2>Central de controle da Anyma</h2><p>Escolha uma loja para testar o ambiente exatamente como ele está salvo no banco.</p></div><ShieldCheck /></section>
+    <section className="platform-stores">{workspace.stores.map((store) => <article key={store.id} className={store.id === workspace.store.id ? 'platform-store active' : 'platform-store'}><Building2/><div><strong>{store.name}</strong><span>{store.slug}</span></div><button className="secondary" disabled={store.id === workspace.store.id} onClick={() => workspace.switchStore(store.id)}>{store.id === workspace.store.id ? 'Loja atual' : 'Acessar loja'}</button></article>)}</section>
+    <div className="security-note safe"><CheckCircle2 size={19}/><p>Os clientes permanecem isolados entre si. Somente sua conta de Superadministrador enxerga todas as lojas durante os testes.</p></div>
   </>
 }
 
@@ -236,6 +248,6 @@ function lastSevenDays(sales) {
 }
 
 function initials(name = '') { return name.split(' ').filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'U' }
-function roleLabel(role) { return ({ owner: 'Proprietário', admin: 'Administrador', manager: 'Gerente', operator: 'Operador', viewer: 'Consulta' })[role] || 'Usuário' }
+function roleLabel(role) { return ({ superadmin: 'Superadministrador', owner: 'Proprietário', admin: 'Administrador', manager: 'Gerente', operator: 'Operador', viewer: 'Consulta' })[role] || 'Usuário' }
 
 export default App

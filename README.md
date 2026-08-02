@@ -11,6 +11,8 @@ Sistema de gestão para lojas desenvolvido pela Camacho Tecnologia.
 - ajustes de estoque com histórico de movimentações;
 - PDV com venda transacional e baixa persistente de estoque;
 - painel, caixa e relatórios usando dados reais da loja.
+- Central Anyma para o Superadministrador alternar entre lojas durante os testes;
+- acesso global exclusivo e auditado, mantendo clientes isolados entre si.
 
 ## Executar
 
