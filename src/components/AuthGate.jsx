@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, LoaderCircle, LockKeyhole, Store } from 'lucide-react'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 
@@ -7,6 +7,14 @@ const initialForm = { fullName: '', storeName: '', email: '', password: '' }
 export default function AuthGate({ children }) {
   const [workspace, setWorkspace] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const switchStore = useCallback(async (storeId) => {
+    setWorkspace((current) => {
+      const store = current?.stores?.find((item) => item.id === storeId)
+      return store ? { ...current, store } : current
+    })
+    await supabase.rpc('log_platform_access', { p_store_id: storeId, p_reason: 'Teste administrativo' })
+  }, [])
 
   useEffect(() => {
     if (!supabase) {
@@ -23,15 +31,23 @@ export default function AuthGate({ children }) {
         return
       }
 
-      const [{ data: profile }, { data: memberships, error }] = await Promise.all([
+      const [{ data: profile }, { data: administrator }] = await Promise.all([
         supabase.from('profiles').select('user_id, full_name').eq('user_id', userId).single(),
-        supabase.from('store_members').select('role, stores(id, name, slug)').eq('user_id', userId).eq('active', true).limit(1),
+        supabase.from('platform_admins').select('user_id').eq('user_id', userId).eq('active', true).maybeSingle(),
       ])
 
+      const isPlatformAdmin = Boolean(administrator)
+      const { data: memberships, error } = isPlatformAdmin
+        ? await supabase.from('stores').select('id, name, slug').eq('active', true).order('name')
+        : await supabase.from('store_members').select('role, stores(id, name, slug)').eq('user_id', userId).eq('active', true).limit(1)
+
+      const stores = isPlatformAdmin ? (memberships || []) : (memberships || []).map((item) => item.stores)
+      const store = stores[0]
+
       if (active) {
-        setWorkspace(error || !memberships?.[0]
+        setWorkspace(error || !store
           ? null
-          : { userId, profile, role: memberships[0].role, store: memberships[0].stores })
+          : { userId, profile, role: isPlatformAdmin ? 'superadmin' : memberships[0].role, isPlatformAdmin, stores, store })
         setLoading(false)
       }
     }
@@ -47,7 +63,7 @@ export default function AuthGate({ children }) {
   if (!isSupabaseConfigured) return <ConfigurationNotice />
   if (loading) return <FullScreenStatus text="Preparando sua loja..." />
   if (!workspace) return <AuthScreen />
-  return children(workspace)
+  return children({ ...workspace, switchStore })
 }
 
 function AuthScreen() {
