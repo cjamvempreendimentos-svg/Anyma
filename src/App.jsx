@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BadgeDollarSign, BarChart3, Boxes, ChevronDown, CircleUserRound,
   CreditCard, LayoutDashboard, Menu, PackagePlus, ReceiptText, Search, Settings,
@@ -10,6 +10,7 @@ import {
 import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, money, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './lib/format'
 import { hasCapability, pageAllowed } from './lib/permissions'
 import { canGrantRole, roleLabel } from './lib/roles'
+import { saleAttemptFingerprint, saleRequestForFingerprint } from './lib/saleIdempotency'
 import { supabase } from './lib/supabase'
 
 const nav = [
@@ -36,6 +37,9 @@ function App({ workspace }) {
   const [teamInvitations, setTeamInvitations] = useState([])
   const [toast, setToast] = useState('')
   const [dataLoading, setDataLoading] = useState(true)
+  const [saleProcessing, setSaleProcessing] = useState(false)
+  const saleSubmission = useRef(null)
+  const saleSubmissionInFlight = useRef(false)
 
   const loadData = async () => {
     setDataLoading(true)
@@ -80,6 +84,7 @@ function App({ workspace }) {
   const notify = (message) => { setToast(message); window.setTimeout(() => setToast(''), 2600) }
 
   const addToCart = (product) => {
+    if (saleSubmissionInFlight.current) return
     if (product.stock < 1) return notify('Produto sem estoque disponível.')
     setCart((items) => {
       const current = items.find((item) => item.id === product.id)
@@ -90,24 +95,50 @@ function App({ workspace }) {
     })
   }
 
-  const setQty = (id, delta) => setCart((items) => items
-    .map((item) => item.id === id ? { ...item, qty: Math.min(item.stock, item.qty + delta) } : item)
-    .filter((item) => item.qty > 0))
+  const setQty = (id, delta) => {
+    if (saleSubmissionInFlight.current) return
+    setCart((items) => items
+      .map((item) => item.id === id ? { ...item, qty: Math.min(item.stock, item.qty + delta) } : item)
+      .filter((item) => item.qty > 0))
+  }
 
   const activeCash = cashSessions.find((session) => session.status === 'open' && session.operatorId === workspace.profile?.user_id)
 
   const finishSale = async (payments, customerId) => {
+    if (saleSubmissionInFlight.current) return false
     if (!cart.length) return
     if (!activeCash) { notify('Abra seu turno no menu Caixa antes de vender.'); return false }
     const total = saleTotal(cart)
-    const { error } = await supabase.rpc('complete_sale_v4', {
-      p_store_id: workspace.store.id,
-      p_cash_session_id: activeCash.id,
-      p_payments: payments.map((payment) => ({ method: payment.method, amount_cents: Math.round(Number(payment.amount) * 100) })),
-      p_customer_id: customerId || null,
-      p_items: cart.map((item) => ({ product_id: item.id, quantity: item.qty })),
-    })
+    const requestPayload = {
+      storeId: workspace.store.id,
+      cashSessionId: activeCash.id,
+      payments: payments.map((payment) => ({ method: payment.method, amount_cents: Math.round(Number(payment.amount) * 100) })),
+      customerId: customerId || null,
+      items: cart.map((item) => ({ product_id: item.id, quantity: item.qty })),
+    }
+    const fingerprint = saleAttemptFingerprint(requestPayload)
+    saleSubmission.current = saleRequestForFingerprint(saleSubmission.current, fingerprint)
+    saleSubmissionInFlight.current = true
+    setSaleProcessing(true)
+    let error
+    try {
+      const result = await supabase.rpc('complete_sale_v5', {
+        p_store_id: workspace.store.id,
+        p_cash_session_id: activeCash.id,
+        p_request_id: saleSubmission.current.requestId,
+        p_payments: requestPayload.payments,
+        p_customer_id: requestPayload.customerId,
+        p_items: requestPayload.items,
+      })
+      error = result.error
+    } catch {
+      error = { message: 'Falha de conexão' }
+    } finally {
+      saleSubmissionInFlight.current = false
+      setSaleProcessing(false)
+    }
     if (error) return notify(error.message.includes('Estoque insuficiente') ? error.message : 'Não foi possível concluir a venda.')
+    saleSubmission.current = null
     setCart([])
     await loadData()
     notify(`Venda de ${money(total)} concluída com ${payments.length > 1 ? 'pagamento dividido' : payments[0].method}.`); return true
@@ -306,7 +337,7 @@ function App({ workspace }) {
           {workspace.isPlatformAdmin && <div className="admin-access-banner"><ShieldCheck size={18}/><div><strong>Acesso global de testes ativo</strong><span>Você está visualizando {workspace.store.name}. Cada troca de loja fica registrada.</span></div></div>}
           {page === 'Central Anyma' && <PlatformCentral workspace={workspace} />}
           {page === 'Visão geral' && <Dashboard store={workspace.store} products={products} sales={sales} activeCash={activeCash} goTo={changePage} />}
-          {page === 'PDV' && <POS products={products.filter((product) => product.active)} customers={customers} activeCash={activeCash} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} />}
+          {page === 'PDV' && <POS products={products.filter((product) => product.active)} customers={customers} activeCash={activeCash} cart={cart} add={addToCart} setQty={setQty} finish={finishSale} processing={saleProcessing} />}
           {page === 'Produtos' && <Products products={products} suppliers={suppliers} add={addToCart} goTo={changePage} createProduct={createProduct} updateProduct={updateProduct} createSupplier={createSupplier} canManage={hasCapability(workspace.role, 'management')} />}
           {page === 'Estoque' && <Inventory products={products.filter((product) => product.active)} movements={inventoryMovements} adjustStock={adjustStock} canManage={hasCapability(workspace.role, 'management')} />}
           {page === 'Clientes' && <Customers customers={customers} createCustomer={createCustomer} />}
@@ -361,7 +392,7 @@ function PlatformCentral({ workspace }) {
 
 function Metric({ label, value, note, positive, warning }) { return <article className="metric"><span>{label}</span><strong>{value}</strong><small className={positive ? 'positive' : warning ? 'warning' : ''}>{positive && 'Alta · '}{warning && 'Atenção · '}{note}</small></article> }
 
-function POS({ products, customers, activeCash, cart, add, setQty, finish }) {
+function POS({ products, customers, activeCash, cart, add, setQty, finish, processing }) {
   const [query, setQuery] = useState('')
   const [payments, setPayments] = useState([{ method: 'Pix', amount: '' }])
   const [customerId, setCustomerId] = useState('')
@@ -374,7 +405,7 @@ function POS({ products, customers, activeCash, cart, add, setQty, finish }) {
   const paymentValid = paymentsMatchTotal(payments, total)
   const updatePayment = (index, field, value) => setPayments((current) => current.map((payment, paymentIndex) => paymentIndex === index ? { ...payment, [field]: value } : payment))
   const availableMethods = (currentIndex) => ['Pix','Crédito','Débito','Dinheiro'].filter((method) => !payments.some((payment, index) => index !== currentIndex && payment.method === method))
-  return <>{!activeCash && <div className="security-note"><LockKeyhole size={19}/><p>Seu turno está fechado. Abra o caixa antes de concluir uma venda.</p></div>}<div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código, tamanho ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}{product.size ? ` · ${product.size}` : ''}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}{item.size ? ` · ${item.size}` : ''}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><div className="cart-select"><SearchableSelect label="Cliente" value={customerId} onChange={setCustomerId} options={[{ id: '', label: 'Consumidor final' }, ...customers.map((customer) => ({ id: customer.id, label: customer.name, keywords: `${customer.phone} ${customer.email}` }))]} placeholder="Digite para buscar o cliente" /></div><div className="split-payment"><div className="split-payment-head"><span>Pagamentos</span><button type="button" className="text-btn" disabled={payments.length === 4} onClick={() => { const nextMethod = ['Pix','Crédito','Débito','Dinheiro'].find((method) => !payments.some((payment) => payment.method === method)); setPayments((current) => [...current, { method: nextMethod, amount: '' }]) }}><Plus size={14}/>Dividir pagamento</button></div>{payments.map((payment, index) => <div className="payment-row" key={`${payment.method}-${index}`}><select value={payment.method} onChange={(event) => updatePayment(index, 'method', event.target.value)}>{availableMethods(index).map((method) => <option key={method}>{method}</option>)}</select><label>R$<input required min="0.01" step="0.01" type="number" value={payment.amount} onChange={(event) => updatePayment(index, 'amount', event.target.value)} /></label>{payments.length > 1 && <button type="button" className="icon-btn" title="Remover pagamento" onClick={() => setPayments((current) => current.filter((_, paymentIndex) => paymentIndex !== index))}><X/></button>}</div>)}<div className={paymentValid ? 'payment-balance matched' : 'payment-balance'}><span>Informado {money(paid)}</span><b>{paymentValid ? 'Total conferido' : `Falta ${money(total - paid)}`}</b></div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" disabled={!activeCash || !paymentValid} onClick={async () => { if (await finish(payments, customerId)) { setCustomerId(''); setPayments([{ method: 'Pix', amount: '' }]) } }}><CheckCircle2/>Finalizar venda</button></>}</aside></div></>
+  return <>{!activeCash && <div className="security-note"><LockKeyhole size={19}/><p>Seu turno está fechado. Abra o caixa antes de concluir uma venda.</p></div>}<div className="pos-layout"><section><div className="page-intro"><div><span className="section-label">VENDA RÁPIDA</span><h2>Escolha os produtos</h2></div><label className="search large"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Nome, código, tamanho ou categoria" /></label></div><div className="product-grid">{shown.map(product => <button className="product-card" key={product.id} disabled={processing} onClick={() => add(product)}><span className="product-photo" style={{'--tone':product.color}}><ShoppingBag /></span><span className="category">{product.category}</span><strong>{product.name}{product.size ? ` · ${product.size}` : ''}</strong><small>{product.sku} · {product.stock} un.</small><b>{money(product.price)}</b><i><Plus size={17}/></i></button>)}</div></section><aside className="cart"><div className="cart-head"><div><span className="section-label">VENDA ATUAL</span><h3>Carrinho</h3></div><span>{cart.reduce((s,i)=>s+i.qty,0)} itens</span></div>{!cart.length ? <div className="empty-cart"><ShoppingCart/><strong>Carrinho vazio</strong><p>Toque em um produto para iniciar a venda.</p></div> : <><div className="cart-items">{cart.map(item => <div className="cart-row" key={item.id}><span className="mini-swatch" style={{background:item.color}}/><div><strong>{item.name}{item.size ? ` · ${item.size}` : ''}</strong><small>{money(item.price)}</small></div><div className="qty"><button disabled={processing} onClick={() => setQty(item.id,-1)}><Minus/></button><span>{item.qty}</span><button disabled={processing} onClick={() => setQty(item.id,1)}><Plus/></button></div></div>)}</div><div className="cart-select"><SearchableSelect label="Cliente" value={customerId} onChange={setCustomerId} options={[{ id: '', label: 'Consumidor final' }, ...customers.map((customer) => ({ id: customer.id, label: customer.name, keywords: `${customer.phone} ${customer.email}` }))]} placeholder="Digite para buscar o cliente" /></div><div className="split-payment"><div className="split-payment-head"><span>Pagamentos</span><button type="button" className="text-btn" disabled={processing || payments.length === 4} onClick={() => { const nextMethod = ['Pix','Crédito','Débito','Dinheiro'].find((method) => !payments.some((payment) => payment.method === method)); setPayments((current) => [...current, { method: nextMethod, amount: '' }]) }}><Plus size={14}/>Dividir pagamento</button></div>{payments.map((payment, index) => <div className="payment-row" key={`${payment.method}-${index}`}><select disabled={processing} value={payment.method} onChange={(event) => updatePayment(index, 'method', event.target.value)}>{availableMethods(index).map((method) => <option key={method}>{method}</option>)}</select><label>R$<input required disabled={processing} min="0.01" step="0.01" type="number" value={payment.amount} onChange={(event) => updatePayment(index, 'amount', event.target.value)} /></label>{payments.length > 1 && <button type="button" className="icon-btn" disabled={processing} title="Remover pagamento" onClick={() => setPayments((current) => current.filter((_, paymentIndex) => paymentIndex !== index))}><X/></button>}</div>)}<div className={paymentValid ? 'payment-balance matched' : 'payment-balance'}><span>Informado {money(paid)}</span><b>{paymentValid ? 'Total conferido' : `Falta ${money(total - paid)}`}</b></div></div><div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="finish" disabled={processing || !activeCash || !paymentValid} onClick={async () => { if (await finish(payments, customerId)) { setCustomerId(''); setPayments([{ method: 'Pix', amount: '' }]) } }}><CheckCircle2/>{processing ? 'Finalizando...' : 'Finalizar venda'}</button></>}</aside></div></>
 }
 
 function Products({ products, suppliers, add, goTo, createProduct, updateProduct, createSupplier, canManage }) {
