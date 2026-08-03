@@ -6,6 +6,13 @@ export const saleTotal = (items) => items.reduce((total, item) => total + item.p
 
 export const purchaseTotal = (items) => items.reduce((total, item) => total + Number(item.cost || 0) * Number(item.quantity || 0), 0)
 
+export const paymentMethodTotals = (sales) => sales.reduce((totals, sale) => {
+  for (const payment of sale.payments || []) {
+    totals[payment.method] = (totals[payment.method] || 0) + Number(payment.amount || 0)
+  }
+  return totals
+}, { Pix: 0, Crédito: 0, Débito: 0, Dinheiro: 0 })
+
 export const paymentTotal = (payments = []) => payments.reduce((total, payment) => total + Number(payment.amount || 0), 0)
 
 export const paymentsMatchTotal = (payments, total) => {
