@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './format'
+import { cashDifferenceLabel, cashExpected, cashRemoved, lowStock, paymentMethodTotals, paymentTotal, paymentsMatchTotal, purchaseTotal, saleTotal } from './format'
 
 describe('regras comerciais', () => {
   it('calcula o total do carrinho', () => {
@@ -12,6 +12,13 @@ describe('regras comerciais', () => {
 
   it('calcula o total de uma compra recebida', () => {
     expect(purchaseTotal([{ cost: '12.50', quantity: '3' }, { cost: '8', quantity: '2' }])).toBe(53.5)
+  })
+
+  it('separa o faturamento do turno por forma de pagamento', () => {
+    expect(paymentMethodTotals([
+      { payments: [{ method: 'Pix', amount: 10 }, { method: 'Crédito', amount: 20 }] },
+      { payments: [{ method: 'Débito', amount: 70 }] },
+    ])).toEqual({ Pix: 10, Crédito: 20, Débito: 70, Dinheiro: 0 })
   })
 
   it('calcula o saldo físico esperado do caixa', () => {
